@@ -166,29 +166,42 @@ class AdShareTelegramBot:
         self.send_telegram(help_msg)
     
     def login_to_adshare(self):
-        """Login to AdShare"""
-        try:
-            login_url = "https://adsha.re/login"
-            response = self.session.get(login_url, timeout=30)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            form = soup.find('form', {'name': 'login'})
-            action_url = form.get('action')
-            
-            login_data = {
-                'mail': self.email,
-                '04ce63a75551c350478884bcd8e6530f': self.password
-            }
-            
-            response = self.session.post(f"https://adsha.re{action_url}", data=login_data, allow_redirects=True)
-            
-            # Verify login
-            test_response = self.session.get("https://adsha.re/adverts/create", timeout=30)
-            return "adverts/create" in test_response.url
-            
-        except Exception as e:
-            logger.error(f"Login error: {e}")
+    """Login to AdShare"""
+    try:
+        login_url = "https://adsha.re/login"
+        response = self.session.get(login_url, timeout=30)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        form = soup.find('form', {'name': 'login'})
+        if not form:
+            logger.error("Login form not found")
             return False
+            
+        # Get the action URL properly
+        action_path = form.get('action', '')
+        
+        # Build correct URL
+        if action_path.startswith('http'):
+            post_url = action_path
+        else:
+            post_url = f"https://adsha.re{action_path}"
+        
+        logger.info(f"Posting to: {post_url}")
+        
+        login_data = {
+            'mail': self.email,
+            '04ce63a75551c350478884bcd8e6530f': self.password
+        }
+        
+        response = self.session.post(post_url, data=login_data, allow_redirects=True)
+        
+        # Verify login by accessing protected page
+        test_response = self.session.get("https://adsha.re/adverts/create", timeout=30)
+        return "adverts/create" in test_response.url
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        return False
     
     def get_top_bid(self):
         """Get current top bid"""
