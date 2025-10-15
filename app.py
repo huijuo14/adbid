@@ -142,31 +142,37 @@ class AdShareEfficiencyBot:
         return new_bid
 
     def should_skip_bid_for_efficiency(self, campaign_name, current_top_bid, my_bid):
-        """Smart skipping to save credits"""
-        campaign_data = self.campaigns.get(campaign_name, {})
-        
-        # Skip if we're already at top
-        if my_bid >= current_top_bid:
-            self.efficiency_stats['unnecessary_bids_avoided'] += 1
+    """Smart skipping with random 1-7 minute hold"""
+    campaign_data = self.campaigns.get(campaign_name, {})
+    
+    # Skip if we're already at top
+    if my_bid >= current_top_bid:
+        self.efficiency_stats['unnecessary_bids_avoided'] += 1
+        return True
+    
+    # Skip if the gap is too small (might be temporary fluctuation)
+    if current_top_bid - my_bid <= 1:
+        if random.random() < 0.3:  # 30% chance to skip small gaps
+            self.efficiency_stats['smart_skips'] += 1
             return True
+    
+    # 🎯 RANDOM HOLD: 1-7 minutes (instead of fixed 5)
+    last_bid_time = campaign_data.get('last_bid_time')
+    if last_bid_time:
+        time_since_last_bid = (datetime.now() - last_bid_time).total_seconds()
         
-        # Skip if the gap is too small (might be temporary fluctuation)
-        if current_top_bid - my_bid <= 1:
-            if random.random() < 0.3:  # 30% chance to skip small gaps
+        # Generate random hold time between 1-7 minutes (60-420 seconds)
+        random_hold_time = random.randint(60, 420)
+        
+        if time_since_last_bid < random_hold_time:
+            # 30% chance to skip during hold period
+            if random.random() < 0.3:
                 self.efficiency_stats['smart_skips'] += 1
+                logger.info(f"⏳ Holding bid for {random_hold_time//60}min (random hold)")
                 return True
-        
-        # Skip if we just bid recently (avoid bid wars)
-        last_bid_time = campaign_data.get('last_bid_time')
-        if last_bid_time:
-            time_since_last_bid = (datetime.now() - last_bid_time).total_seconds()
-            if time_since_last_bid < 300:  # 5 minutes
-                if random.random() < 0.4:  # 40% chance to skip recent bids
-                    self.efficiency_stats['smart_skips'] += 1
-                    return True
-        
-        return False
-
+    
+    return False
+    
     def smart_login(self):
         """Efficient login management"""
         if self.check_session_valid():
