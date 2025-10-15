@@ -505,33 +505,38 @@ Increment: +2 above top bid
             logger.error(f"❌ Auto-bid error for {campaign_name}: {e}")
 
     def run(self):
-        """Main bot loop with ULTRA-MINIMAL session management"""
-        logger.info("🤖 Starting AdShare Auto-Bid Bot...")
-        
-        # Initial login
-        if not self.force_login():
-            logger.error("❌ Initial login failed")
-            return
-        
-        self.send_telegram("🤖 <b>Auto-Bid Bot Started!</b>\nUse /start to begin monitoring.\nUse /help for commands.")
-        
-        check_count = 0
-        while True:
-            try:
-                # Process Telegram commands every minute
-                if check_count % 1 == 0:
-                    self.process_telegram_command()
-                
-                # Check campaigns every interval (only if monitoring)
-                if self.is_monitoring and check_count % (self.check_interval // 60) == 0:
-                    self.check_all_campaigns()
-                
-                check_count += 1
-                time.sleep(60)  # Check every minute
-                
-            except Exception as e:
-                logger.error(f"❌ Main loop error: {e}")
-                time.sleep(30)
+    """Main bot loop - OPTIMIZED"""
+    logger.info("🤖 Starting AdShare Auto-Bid Bot...")
+    
+    # Initial login
+    if not self.force_login():
+        logger.error("❌ Initial login failed")
+        return
+    
+    self.send_telegram("🤖 <b>Auto-Bid Bot Started!</b>\nUse /start to begin monitoring.\nUse /help for commands.")
+    
+    last_command_check = 0
+    check_count = 0
+    
+    while True:
+        try:
+            current_time = time.time()
+            
+            # Process Telegram commands every 10 seconds (NOT every minute)
+            if current_time - last_command_check >= 10:  # Every 10 seconds
+                self.process_telegram_command()
+                last_command_check = current_time
+            
+            # Check campaigns every 5 minutes (only if monitoring)
+            if self.is_monitoring and check_count % (self.check_interval // 60) == 0:
+                self.check_all_campaigns()
+            
+            check_count += 1
+            time.sleep(5)  # Sleep only 5 seconds between loops
+            
+        except Exception as e:
+            logger.error(f"❌ Main loop error: {e}")
+            time.sleep(30)
 
 # Start the bot
 if __name__ == "__main__":
