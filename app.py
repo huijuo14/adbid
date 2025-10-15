@@ -4,7 +4,7 @@ import time
 import re
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask
 import threading
 
@@ -17,13 +17,13 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 AdShare Efficiency Bot - Maximum Top Position, Minimum Credits"
+    return "🤖 Ultimate Smart Bidder - Top Time Tracking & Analytics"
 
 @app.route('/health')
 def health():
-    return "✅ Bot Healthy - Efficiency Mode Active"
+    return "✅ Bot Healthy - Smart Features Active"
 
-class AdShareEfficiencyBot:
+class UltimateSmartBidder:
     def __init__(self):
         # Telegram credentials
         self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
@@ -39,39 +39,37 @@ class AdShareEfficiencyBot:
         self.rotate_user_agent()
         self.session_valid = False
         self.consecutive_failures = 0
-        self.last_action_time = 0
-        self.action_count_today = 0
         
-        # 🎯 EFFICIENCY SETTINGS
+        # Bot settings
         self.is_monitoring = False
         self.campaigns = {}
         
-        # 💰 CREDIT OPTIMIZATION
-        self.default_max_bid = 369  # Your preferred max
-        self.efficiency_mode = True  # Smart credit saving
-        
-        # ⚡ SMART TIMING
-        self.check_intervals = {
-            'active_competition': (180, 300),    # 3-5 min when competing
-            'normal': (300, 600),               # 5-10 min normally
-            'dominant': (600, 900)              # 10-15 min when winning
+        # 🎯 SMART TOP BIDDER TRACKING
+        self.top_bidder_tracking = {
+            'daily_target_minutes': random.randint(480, 600),  # 8-10 hours random
+            'current_minutes_today': 0,
+            'last_reset_date': datetime.now().date(),
+            'current_session_start': None,
+            'is_currently_top': False
         }
         
-        # 🎯 SMART BIDDING STRATEGIES
-        self.bid_strategies = {
-            'efficient': [1, 1, 1, 2, 2, 2, 3],  # Minimum to win
-            'aggressive': [2, 2, 3, 3, 4, 4, 5], # Dominate quickly
-            'stealth': [1, 1, 2, 2, 2, 3, 3]     # Slow and steady
+        # ⚡ FREQUENCY-BASED AGGRESSION
+        self.frequency_modes = {
+            'aggressive': {'min': 120, 'max': 180},    # 2-3 minutes
+            'conservative': {'min': 900, 'max': 1200}, # 15-20 minutes
+            'current_mode': 'conservative'
         }
-        self.current_strategy = 'efficient'
         
-        # 📊 EFFICIENCY TRACKING
-        self.efficiency_stats = {
-            'credits_saved': 0,
-            'time_at_top': 0,
-            'smart_skips': 0,
-            'unnecessary_bids_avoided': 0
+        # 📊 SMART VIEWS ANALYTICS
+        self.views_analytics = {
+            'hourly_views': {},           # {'14': 45, '15': 52}
+            'peak_hours': [],
+            'last_views_count': {},
+            'best_performing_hours': []
         }
+        
+        # 💰 MINIMAL BIDDING
+        self.minimal_bid_weights = [1, 1, 1, 2, 2, 2, 2]  # Mostly +1, sometimes +2
         
         # Statistics
         self.stats = {
@@ -79,8 +77,12 @@ class AdShareEfficiencyBot:
             'checks_made': 0,
             'auto_bids_made': 0,
             'logins_made': 0,
-            'last_auto_bid': None
+            'last_auto_bid': None,
+            'credits_saved': 0
         }
+        
+        # 🎲 RANDOM HOLD SETTINGS
+        self.random_hold_range = (60, 420)  # 1-7 minutes
 
     def rotate_user_agent(self):
         """Rotate user agents"""
@@ -97,93 +99,155 @@ class AdShareEfficiencyBot:
         time.sleep(delay)
         return delay
 
-    def get_smart_check_interval(self, campaign_name):
-        """Smart interval based on competition level"""
-        if campaign_name in self.campaigns:
-            campaign_data = self.campaigns[campaign_name]
+    def reset_daily_target_if_needed(self):
+        """Reset daily top bidder target if new day"""
+        today = datetime.now().date()
+        if today != self.top_bidder_tracking['last_reset_date']:
+            self.top_bidder_tracking = {
+                'daily_target_minutes': random.randint(480, 600),
+                'current_minutes_today': 0,
+                'last_reset_date': today,
+                'current_session_start': None,
+                'is_currently_top': False
+            }
+            logger.info(f"🔄 New daily target: {self.top_bidder_tracking['daily_target_minutes']} minutes")
+            self.send_telegram(f"🎯 New Daily Target: {self.top_bidder_tracking['daily_target_minutes']//60}h {self.top_bidder_tracking['daily_target_minutes']%60}m as #1")
+
+    def update_top_bidder_tracking(self, campaign_name, is_top_bidder):
+        """Track exact minutes as top bidder"""
+        self.reset_daily_target_if_needed()
+        
+        current_time = datetime.now()
+        
+        if is_top_bidder and not self.top_bidder_tracking['is_currently_top']:
+            # Started being top bidder
+            self.top_bidder_tracking['current_session_start'] = current_time
+            self.top_bidder_tracking['is_currently_top'] = True
+            logger.info(f"🏆 Started top bidder session for {campaign_name}")
             
-            # If we're not at top, check more frequently
-            if campaign_data.get('top_bid', 0) > campaign_data.get('my_bid', 0):
-                return random.randint(*self.check_intervals['active_competition'])
-            # If we're dominating, check less frequently
-            elif campaign_data.get('my_bid', 0) - campaign_data.get('top_bid', 0) >= 5:
-                return random.randint(*self.check_intervals['dominant'])
-        
-        return random.randint(*self.check_intervals['normal'])
+        elif not is_top_bidder and self.top_bidder_tracking['is_currently_top']:
+            # Stopped being top bidder - add minutes
+            if self.top_bidder_tracking['current_session_start']:
+                session_duration = (current_time - self.top_bidder_tracking['current_session_start']).total_seconds() / 60
+                self.top_bidder_tracking['current_minutes_today'] += session_duration
+                logger.info(f"⏱️ Added {session_duration:.1f} top bidder minutes")
+                
+                # Send progress update every 30 minutes
+                if int(self.top_bidder_tracking['current_minutes_today']) % 30 == 0:
+                    self.send_top_bidder_progress()
+            
+            self.top_bidder_tracking['current_session_start'] = None
+            self.top_bidder_tracking['is_currently_top'] = False
 
-    def calculate_efficient_bid(self, current_top_bid, my_bid, campaign_name):
-        """Smart bidding that maximizes position while minimizing cost"""
-        strategy_weights = self.bid_strategies[self.current_strategy]
-        base_increment = random.choice(strategy_weights)
+    def send_top_bidder_progress(self):
+        """Send top bidder progress update"""
+        target = self.top_bidder_tracking['daily_target_minutes']
+        current = self.top_bidder_tracking['current_minutes_today']
+        progress_percent = (current / target * 100) if target > 0 else 0
         
-        # 🎯 EFFICIENCY RULES:
+        progress_msg = f"""
+⏱️ TOP BIDDER PROGRESS
+🎯 Daily Target: {target//60}h {target%60}m
+📊 Current: {current//60}h {current%60}m ({progress_percent:.1f}%)
+⏳ Remaining: {(target - current)//60}h {((target - current)%60):.0f}m
+        """
+        self.send_telegram(progress_msg)
+
+    def calculate_smart_frequency(self):
+        """Determine check frequency based on top bidder progress"""
+        target = self.top_bidder_tracking['daily_target_minutes']
+        current = self.top_bidder_tracking['current_minutes_today']
         
-        # Rule 1: If we were recently outbid, be slightly more aggressive
+        # If behind target, check more frequently
+        if current < target * 0.7:  # Behind 70% of target
+            self.frequency_modes['current_mode'] = 'aggressive'
+        else:
+            self.frequency_modes['current_mode'] = 'conservative'
+            
+        mode = self.frequency_modes['current_mode']
+        return random.randint(self.frequency_modes[mode]['min'], self.frequency_modes[mode]['max'])
+
+    def update_views_analytics(self, campaign_name, current_views):
+        """Track views patterns and detect peak hours"""
+        current_hour = datetime.now().hour
+        current_date = datetime.now().date()
+        
+        # Initialize hourly tracking
+        hour_key = f"{current_date}_{current_hour}"
+        if hour_key not in self.views_analytics['hourly_views']:
+            self.views_analytics['hourly_views'][hour_key] = 0
+        
+        # Calculate views this hour
+        if campaign_name in self.views_analytics['last_views_count']:
+            previous_views = self.views_analytics['last_views_count'][campaign_name]
+            views_increase = current_views - previous_views
+            if views_increase > 0:
+                self.views_analytics['hourly_views'][hour_key] += views_increase
+        
+        self.views_analytics['last_views_count'][campaign_name] = current_views
+        
+        # Update peak hours (once we have enough data)
+        if len(self.views_analytics['hourly_views']) > 24:
+            self.calculate_peak_hours()
+
+    def calculate_peak_hours(self):
+        """Calculate best performing hours"""
+        hourly_totals = {}
+        
+        for hour_key, views in self.views_analytics['hourly_views'].items():
+            hour = int(hour_key.split('_')[1])
+            if hour not in hourly_totals:
+                hourly_totals[hour] = []
+            hourly_totals[hour].append(views)
+        
+        # Calculate average views per hour
+        hourly_averages = {}
+        for hour, views_list in hourly_totals.items():
+            hourly_averages[hour] = sum(views_list) / len(views_list)
+        
+        # Get top 6 hours
+        sorted_hours = sorted(hourly_averages.items(), key=lambda x: x[1], reverse=True)
+        self.views_analytics['best_performing_hours'] = [hour for hour, avg in sorted_hours[:6]]
+        self.views_analytics['peak_hours'] = self.views_analytics['best_performing_hours']
+        
+        logger.info(f"📊 Peak hours detected: {self.views_analytics['peak_hours']}")
+
+    def get_current_mode_based_on_hour(self):
+        """Aggressive during peak hours, conservative otherwise"""
+        current_hour = datetime.now().hour
+        if current_hour in self.views_analytics['peak_hours']:
+            return 'aggressive'
+        return 'conservative'
+
+    def calculate_minimal_bid(self, current_top_bid):
+        """Always bid +1 or +2 above current top"""
+        return current_top_bid + random.choice(self.minimal_bid_weights)
+
+    def should_skip_bid_with_random_hold(self, campaign_name):
+        """Random 1-7 minute hold between bids"""
         campaign_data = self.campaigns.get(campaign_name, {})
-        if campaign_data.get('last_outbid_time'):
-            time_since_outbid = (datetime.now() - campaign_data['last_outbid_time']).total_seconds()
-            if time_since_outbid < 600:  # Within 10 minutes of being outbid
-                base_increment = min(base_increment + 1, 5)
+        last_bid_time = campaign_data.get('last_bid_time')
         
-        # Rule 2: If we've been stable at top, be conservative
-        if my_bid >= current_top_bid and campaign_data.get('stable_top_time', 0) > 3600:
-            base_increment = max(1, base_increment - 1)
+        if last_bid_time:
+            time_since_last_bid = (datetime.now() - last_bid_time).total_seconds()
+            random_hold_time = random.randint(*self.random_hold_range)
+            
+            if time_since_last_bid < random_hold_time:
+                if random.random() < 0.3:  # 30% chance to skip during hold
+                    logger.info(f"⏳ Random hold: {random_hold_time//60}min")
+                    return True
         
-        new_bid = current_top_bid + base_increment
-        
-        # Rule 3: Never exceed max bid
-        campaign_max = campaign_data.get('max_bid', self.default_max_bid)
-        new_bid = min(new_bid, campaign_max)
-        
-        # Track efficiency
-        if new_bid - current_top_bid < 3:
-            self.efficiency_stats['credits_saved'] += (3 - (new_bid - current_top_bid))
-        
-        return new_bid
+        return False
 
-    def should_skip_bid_for_efficiency(self, campaign_name, current_top_bid, my_bid):
-    """Smart skipping with random 1-7 minute hold"""
-    campaign_data = self.campaigns.get(campaign_name, {})
-    
-    # Skip if we're already at top
-    if my_bid >= current_top_bid:
-        self.efficiency_stats['unnecessary_bids_avoided'] += 1
-        return True
-    
-    # Skip if the gap is too small (might be temporary fluctuation)
-    if current_top_bid - my_bid <= 1:
-        if random.random() < 0.3:  # 30% chance to skip small gaps
-            self.efficiency_stats['smart_skips'] += 1
-            return True
-    
-    # 🎯 RANDOM HOLD: 1-7 minutes (instead of fixed 5)
-    last_bid_time = campaign_data.get('last_bid_time')
-    if last_bid_time:
-        time_since_last_bid = (datetime.now() - last_bid_time).total_seconds()
-        
-        # Generate random hold time between 1-7 minutes (60-420 seconds)
-        random_hold_time = random.randint(60, 420)
-        
-        if time_since_last_bid < random_hold_time:
-            # 30% chance to skip during hold period
-            if random.random() < 0.3:
-                self.efficiency_stats['smart_skips'] += 1
-                logger.info(f"⏳ Holding bid for {random_hold_time//60}min (random hold)")
-                return True
-    
-    return False
-    
     def smart_login(self):
-        """Efficient login management"""
+        """Smart login management"""
         if self.check_session_valid():
             self.session_valid = True
             return True
-        
-        self.human_delay(3, 7)
         return self.force_login()
 
     def check_session_valid(self):
-        """Lightweight session check"""
+        """Check if session is valid"""
         try:
             response = self.session.get("https://adsha.re/adverts", timeout=10, allow_redirects=False)
             if response.status_code == 302 and "login" in response.headers.get('Location', ''):
@@ -196,8 +260,9 @@ class AdShareEfficiencyBot:
             return False
 
     def force_login(self):
-        """Efficient login"""
+        """Perform login"""
         try:
+            logger.info("🔄 Logging in...")
             self.human_delay(2, 4)
             
             login_url = "https://adsha.re/login"
@@ -229,7 +294,7 @@ class AdShareEfficiencyBot:
             return False
 
     def send_telegram(self, message, parse_mode='HTML'):
-        """Send message via Telegram"""
+        """Send Telegram message"""
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             data = {
@@ -243,7 +308,7 @@ class AdShareEfficiencyBot:
             return False
 
     def process_telegram_command(self):
-        """Process commands"""
+        """Process Telegram commands"""
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
             params = {'offset': self.last_update_id + 1, 'timeout': 5}
@@ -279,15 +344,15 @@ class AdShareEfficiencyBot:
         elif command_lower == '/stop':
             self.stop_monitoring()
         elif command_lower == '/status':
-            self.send_status()
+            self.send_smart_status()
         elif command_lower.startswith('/auto'):
             self.handle_auto_command(command)
         elif command_lower == '/campaigns':
             self.send_campaigns_list()
-        elif command_lower == '/efficiency':
-            self.send_efficiency_report()
-        elif command_lower == '/strategy':
-            self.handle_strategy_command(command)
+        elif command_lower == '/analytics':
+            self.send_analytics_report()
+        elif command_lower == '/progress':
+            self.send_top_bidder_progress()
         elif command_lower == '/help':
             self.send_help()
         else:
@@ -339,23 +404,12 @@ class AdShareEfficiencyBot:
                 status = "enabled" if action == 'on' else "disabled"
                 self.send_telegram(f"🔄 Auto-bid {status} for '{found_campaign}'")
 
-    def handle_strategy_command(self, command):
-        """Change bidding strategy"""
-        parts = command.split()
-        if len(parts) == 2:
-            strategy = parts[1].lower()
-            if strategy in self.bid_strategies:
-                self.current_strategy = strategy
-                self.send_telegram(f"🎯 Strategy changed to: {strategy}")
-            else:
-                self.send_telegram(f"❌ Available strategies: efficient, aggressive, stealth")
-
     def start_monitoring(self):
         """Start monitoring"""
         self.is_monitoring = True
         self.stats['start_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        logger.info("🚀 Efficiency monitoring started")
-        self.send_telegram("🚀 Efficiency Bot Activated!\nMaximizing top position, minimizing credits!")
+        logger.info("🚀 Smart monitoring started")
+        self.send_telegram("🚀 Ultimate Smart Bidder Activated!\nTracking top bidder time & analytics!")
 
     def stop_monitoring(self):
         """Stop monitoring"""
@@ -363,61 +417,75 @@ class AdShareEfficiencyBot:
         logger.info("🛑 Monitoring stopped")
         self.send_telegram("🛑 Bot Stopped!")
 
-    def send_status(self):
-        """Send status with efficiency info"""
+    def send_smart_status(self):
+        """Send smart status with all features"""
         if not self.campaigns:
             self.send_telegram("📊 No campaigns loaded. Send /start")
             return
             
+        # Campaign status
         campaigns_list = ""
-        top_position_count = 0
+        top_campaigns = 0
         total_campaigns = len(self.campaigns)
         
         for name, data in self.campaigns.items():
+            is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
             status = "✅" if data.get('auto_bid', False) else "❌"
-            position = "🏆 TOP" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
-            if position == "🏆 TOP":
-                top_position_count += 1
+            position = "🏆 TOP" if is_top else "📉 #2+"
+            if is_top:
+                top_campaigns += 1
             campaigns_list += f"{position} {name}: {data['my_bid']} credits (Auto: {status})\n"
-        
-        efficiency_rate = (top_position_count / total_campaigns * 100) if total_campaigns > 0 else 0
-        
-        status_msg = f"""
-📊 EFFICIENCY STATUS
 
-🏆 Top Position: {top_position_count}/{total_campaigns} ({efficiency_rate:.1f}%)
-🎯 Strategy: {self.current_strategy}
-🔄 Monitoring: {'✅ Active' if self.is_monitoring else '❌ Inactive'}
+        # Top bidder progress
+        target = self.top_bidder_tracking['daily_target_minutes']
+        current = self.top_bidder_tracking['current_minutes_today']
+        progress_percent = (current / target * 100) if target > 0 else 0
+
+        # Current mode
+        current_hour = datetime.now().hour
+        is_peak_hour = current_hour in self.views_analytics['peak_hours']
+        mode_note = "⚡ AGGRESSIVE" if is_peak_hour else "💤 CONSERVATIVE"
+
+        status_msg = f"""
+📊 SMART STATUS
+
+⏱️ TOP BIDDER: {current//60}h {current%60}m / {target//60}h {target%60}m ({progress_percent:.1f}%)
+🎯 MODE: {mode_note} ({self.frequency_modes['current_mode']})
+🏆 POSITION: {top_campaigns}/{total_campaigns} at #1
 
 {campaigns_list}
-💎 Credits Saved: {self.efficiency_stats['credits_saved']}
-🤖 Smart Skips: {self.efficiency_stats['smart_skips']}
+🤖 Auto Bids: {self.stats['auto_bids_made']}
+💎 Credits Saved: {self.stats['credits_saved']}
         """
         self.send_telegram(status_msg)
 
-    def send_efficiency_report(self):
-        """Send detailed efficiency report"""
-        report = f"""
-💎 EFFICIENCY REPORT
+    def send_analytics_report(self):
+        """Send detailed analytics report"""
+        if not self.views_analytics['peak_hours']:
+            self.send_telegram("📊 Collecting analytics data... check back in a few hours")
+            return
 
-🏆 Performance:
-• Credits Saved: {self.efficiency_stats['credits_saved']}
-• Smart Skips: {self.efficiency_stats['smart_skips']}
-• Unnecessary Bids Avoided: {self.efficiency_stats['unnecessary_bids_avoided']}
+        peak_hours_str = ", ".join([f"{h}:00" for h in self.views_analytics['peak_hours'][:4]])
+        
+        analytics_msg = f"""
+📈 SMART ANALYTICS
 
-🎯 Current Strategy: {self.current_strategy}
-📊 Auto-Bids: {self.stats['auto_bids_made']}
-⏰ Checks: {self.stats['checks_made']}
+🕐 PEAK HOURS: {peak_hours_str}
+⚡ STRATEGY: Aggressive during peak hours
+💤 STRATEGY: Conservative during off-hours
 
-💡 Tips:
-• Use /strategy efficient (save credits)
-• Use /strategy aggressive (dominate faster)
-• Use /strategy stealth (slow and steady)
+📊 TOP BIDDER TODAY:
+• Target: {self.top_bidder_tracking['daily_target_minutes']//60}h
+• Current: {self.top_bidder_tracking['current_minutes_today']//60}h
+• Progress: {(self.top_bidder_tracking['current_minutes_today']/self.top_bidder_tracking['daily_target_minutes']*100):.1f}%
+
+🎯 BIDDING: Always +1/+2 (minimal)
+⏰ HOLDS: Random 1-7 minutes
         """
-        self.send_telegram(report)
+        self.send_telegram(analytics_msg)
 
     def send_campaigns_list(self):
-        """Show campaigns"""
+        """Show campaigns list"""
         if not self.campaigns:
             self.send_telegram("📊 No campaigns loaded. Send /start")
             return
@@ -433,29 +501,32 @@ class AdShareEfficiencyBot:
         self.send_telegram(campaigns_msg)
 
     def send_help(self):
-        """Send help"""
+        """Send help message"""
         help_msg = """
-🤖 EFFICIENCY BOT COMMANDS
+🤖 ULTIMATE SMART BIDDER
 
-/start - Start monitoring
+/start - Start smart monitoring
 /stop - Stop monitoring  
-/status - Efficiency status
+/status - Smart status with analytics
 /campaigns - List campaigns
-/efficiency - Detailed report
+/analytics - Detailed analytics report
+/progress - Top bidder progress
 
 /auto "My Advert" on - Enable auto-bid
 /auto all on - Enable all
 
-/strategy efficient - Save credits (default)
-/strategy aggressive - Dominate faster
-/strategy stealth - Slow and steady
-
-💡 Goal: Maximum top position, minimum credits!
+💡 FEATURES:
+• Tracks exact top bidder time
+• Daily 8-10h random target
+• Smart frequency adjustment
+• Peak hour detection
+• Minimal bidding (+1/+2 only)
+• Random 1-7 minute holds
         """
         self.send_telegram(help_msg)
 
     def parse_campaigns(self, html_content):
-        """Extract campaign data"""
+        """Parse campaigns data"""
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             new_campaigns = {}
@@ -469,6 +540,7 @@ class AdShareEfficiencyBot:
                 if lines:
                     first_line = lines[0]
                     
+                    # Extract campaign name
                     if 'http' in first_line:
                         campaign_name = first_line.split('http')[0].strip()
                     elif 'www.' in first_line:
@@ -478,10 +550,20 @@ class AdShareEfficiencyBot:
                     
                     campaign_name = campaign_name.rstrip('.:- ')
                     
+                    # Extract current bid
                     bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                     my_bid = int(bid_match.group(1)) if bid_match else 0
                     
+                    # Extract views data
+                    views_match = re.search(r'(\d+)\s*/\s*(\d+)\s*visitors', text_content)
+                    current_views = int(views_match.group(1)) if views_match else 0
+                    total_views = int(views_match.group(2)) if views_match else 0
+                    
                     if campaign_name and my_bid > 0:
+                        # Update views analytics
+                        self.update_views_analytics(campaign_name, current_views)
+                        
+                        # Preserve auto_bid setting
                         auto_bid = False
                         if campaign_name in self.campaigns:
                             auto_bid = self.campaigns[campaign_name].get('auto_bid', False)
@@ -490,15 +572,15 @@ class AdShareEfficiencyBot:
                             'my_bid': my_bid,
                             'top_bid': my_bid,
                             'auto_bid': auto_bid,
-                            'max_bid': self.default_max_bid,
-                            'last_checked': None,
+                            'current_views': current_views,
+                            'total_views': total_views,
                             'last_bid_time': None,
-                            'last_outbid_time': None,
-                            'stable_top_time': 0
+                            'last_checked': None
                         }
             
             return new_campaigns
-        except:
+        except Exception as e:
+            logger.error(f"Error parsing campaigns: {e}")
             return {}
 
     def get_top_bid_from_bid_page(self, campaign_name):
@@ -533,13 +615,11 @@ class AdShareEfficiencyBot:
             return None
 
     def check_all_campaigns(self):
-        """Efficient campaign checking"""
+        """Main checking logic with all smart features"""
         if not self.is_monitoring:
             return
             
         self.stats['checks_made'] += 1
-        self.action_count_today += 1
-        self.last_action_time = time.time()
         
         if not self.smart_login():
             return
@@ -551,25 +631,20 @@ class AdShareEfficiencyBot:
             
             new_campaigns_data = self.parse_campaigns(response.content)
             
+            # Update campaigns while preserving settings
             for campaign_name, new_data in new_campaigns_data.items():
                 if campaign_name in self.campaigns:
-                    # Update bid info while preserving settings
-                    old_bid = self.campaigns[campaign_name]['my_bid']
                     self.campaigns[campaign_name]['my_bid'] = new_data['my_bid']
                     self.campaigns[campaign_name]['top_bid'] = new_data['top_bid']
-                    
-                    # Track position stability
-                    if new_data['my_bid'] >= new_data['top_bid']:
-                        self.campaigns[campaign_name]['stable_top_time'] += 300  # 5 minutes
-                    else:
-                        self.campaigns[campaign_name]['stable_top_time'] = 0
-                        self.campaigns[campaign_name]['last_outbid_time'] = datetime.now()
+                    self.campaigns[campaign_name]['current_views'] = new_data['current_views']
+                    self.campaigns[campaign_name]['total_views'] = new_data['total_views']
                 else:
                     self.campaigns[campaign_name] = new_data
             
             if not self.campaigns:
                 return
             
+            # Check each campaign
             for campaign_name, campaign_data in self.campaigns.items():
                 top_bid = self.get_top_bid_from_bid_page(campaign_name)
                 
@@ -579,25 +654,33 @@ class AdShareEfficiencyBot:
                     campaign_data['top_bid'] = top_bid
                     campaign_data['last_checked'] = datetime.now()
                     
-                    # 🎯 EFFICIENCY AUTO-BID LOGIC
+                    # Update top bidder tracking
+                    is_top_bidder = campaign_data['my_bid'] >= top_bid
+                    self.update_top_bidder_tracking(campaign_name, is_top_bidder)
+                    
+                    logger.info(f"📊 {campaign_name}: Your {campaign_data['my_bid']}, Top {top_bid}, Top: {is_top_bidder}")
+                    
+                    # Smart auto-bid logic
                     if (campaign_data['auto_bid'] and 
-                        not self.should_skip_bid_for_efficiency(campaign_name, top_bid, campaign_data['my_bid'])):
+                        not self.should_skip_bid_with_random_hold(campaign_name)):
                         
-                        self.execute_efficient_auto_bid(campaign_name, campaign_data, top_bid)
+                        self.execute_smart_auto_bid(campaign_name, campaign_data, top_bid)
                         
         except Exception as e:
             logger.error(f"Check error: {e}")
 
-    def execute_efficient_auto_bid(self, campaign_name, campaign_data, current_top_bid):
-        """Execute efficient auto-bid"""
+    def execute_smart_auto_bid(self, campaign_name, campaign_data, current_top_bid):
+        """Execute smart auto-bid with all features"""
         try:
-            old_bid = campaign_data['my_bid']
-            new_bid = self.calculate_efficient_bid(current_top_bid, old_bid, campaign_name)
-            
-            if new_bid > campaign_data['max_bid']:
+            # Only bid if we're not top bidder
+            if campaign_data['my_bid'] >= current_top_bid:
                 return
             
-            # Only bid if actually needed
+            # Calculate minimal bid
+            old_bid = campaign_data['my_bid']
+            new_bid = self.calculate_minimal_bid(current_top_bid)
+            
+            # Don't bid if no change or decrease
             if new_bid <= old_bid:
                 return
             
@@ -639,33 +722,24 @@ class AdShareEfficiencyBot:
             response = self.session.post(action, data=bid_data, allow_redirects=True)
             
             if response.status_code == 200:
-                # ✅ SUCCESS: Update FIRST, then send message
+                # Success - update campaign data
                 campaign_data['my_bid'] = new_bid
                 campaign_data['last_bid_time'] = datetime.now()
                 
                 self.stats['auto_bids_made'] += 1
-                self.action_count_today += 1
-                self.stats['last_auto_bid'] = datetime.now().strftime('%H:%M:%S')
+                self.stats['credits_saved'] += (3 - (new_bid - old_bid))  # Track savings
                 
-                logger.info(f"🚀 EFFICIENT BID: {campaign_name} {old_bid}→{new_bid}")
-                
-                # 🎯 EFFICIENCY-FOCUSED MESSAGE
-                increase = new_bid - old_bid
-                efficiency_note = ""
-                if increase <= 2:
-                    efficiency_note = "💎 Efficient bid!"
-                elif increase >= 4:
-                    efficiency_note = "⚡ Aggressive move"
+                logger.info(f"🚀 SMART BID: {campaign_name} {old_bid}→{new_bid}")
                 
                 success_msg = f"""
-🚀 AUTO-BID SUCCESS! {efficiency_note}
+🚀 SMART BID SUCCESS!
 
 📊 Campaign: {campaign_name}
 🎯 Bid: {old_bid} → {new_bid} credits
-📈 Increase: +{increase} credits
+📈 Increase: +{new_bid - old_bid} credits
 🏆 Position: #1 Achieved!
 
-💡 Strategy: {self.current_strategy}
+💡 Strategy: Minimal bidding
                 """
                 self.send_telegram(success_msg)
                 
@@ -673,14 +747,14 @@ class AdShareEfficiencyBot:
             logger.error(f"Bid error: {e}")
 
     def run(self):
-        """Main efficiency loop"""
-        logger.info("🤖 Starting Efficiency Bot...")
+        """Main loop with smart frequency"""
+        logger.info("🤖 Starting Ultimate Smart Bidder...")
         
         if not self.force_login():
             logger.error("❌ Initial login failed")
             return
         
-        self.send_telegram("💎 Efficiency Bot Activated!\nGoal: Maximum top position, minimum credits!")
+        self.send_telegram("🚀 Ultimate Smart Bidder Activated!\nTracking top bidder time & analytics!")
         
         last_command_check = 0
         last_campaign_check = 0
@@ -689,22 +763,32 @@ class AdShareEfficiencyBot:
             try:
                 current_time = time.time()
                 
+                # Process commands every 3 seconds
                 if current_time - last_command_check >= 3:
                     self.process_telegram_command()
                     last_command_check = current_time
                 
-                if self.is_monitoring and current_time - last_campaign_check >= 300:  # 5 min base
-                    self.check_all_campaigns()
-                    last_campaign_check = current_time
+                # Smart campaign checking with frequency adjustment
+                if self.is_monitoring:
+                    check_interval = self.calculate_smart_frequency()
+                    
+                    if current_time - last_campaign_check >= check_interval:
+                        self.check_all_campaigns()
+                        last_campaign_check = current_time
+                        
+                        # Log current mode
+                        mode = self.frequency_modes['current_mode']
+                        logger.info(f"🔄 Check complete. Next in {check_interval//60}min ({mode} mode)")
                 
                 time.sleep(1)
                 
             except Exception as e:
+                logger.error(f"Main loop error: {e}")
                 time.sleep(30)
 
 def run_bot():
     """Run the bot"""
-    bot = AdShareEfficiencyBot()
+    bot = UltimateSmartBidder()
     bot.run()
 
 if __name__ == "__main__":
