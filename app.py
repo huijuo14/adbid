@@ -15,6 +15,9 @@ class AdShareStealthBot:
         # Telegram credentials
         self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
         self.chat_id = "2052085789"
+
+# 🔧 ADD THIS LINE:
+self.last_update_id = 0  # Track last processed message
         
         # AdShare credentials
         self.email = "loginallapps@gmail.com"
@@ -226,24 +229,41 @@ class AdShareStealthBot:
             return False
 
     def process_telegram_command(self):
-        """Process commands with update tracking"""
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates?offset={self.last_update_id + 1}"
-            response = self.session.get(url, timeout=10)
-            data = response.json()
-            
-            if data.get('ok') and data.get('result'):
-                for update in data['result']:
-                    if 'message' in update and 'text' in update['message']:
-                        text = update['message']['text']
-                        chat_id = update['message']['chat']['id']
-                        self.last_update_id = update['update_id']
+    """Process ONLY new commands since last check"""
+    try:
+        # Get only NEW messages
+        url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+        params = {
+            'offset': self.last_update_id + 1,  # Only get new messages
+            'timeout': 5
+        }
+        
+        response = self.session.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        if data.get('ok') and data.get('result'):
+            for update in data['result']:
+                update_id = update['update_id']
+                
+                # Update tracking FIRST
+                if update_id > self.last_update_id:
+                    self.last_update_id = update_id
+                
+                # Process command
+                if 'message' in update and 'text' in update['message']:
+                    text = update['message']['text']
+                    chat_id = update['message']['chat']['id']
+                    
+                    # 🔒 SECURITY: Only process messages from OUR chat
+                    if str(chat_id) != self.chat_id:
+                        continue
                         
-                        if text.startswith('/'):
-                            self.handle_command(text, chat_id)
-                            
-        except Exception as e:
-            logger.error(f"Command processing error: {e}")
+                    if text.startswith('/'):
+                        logger.info(f"📨 Processing: {text}")
+                        self.handle_command(text, chat_id)
+                        
+    except Exception as e:
+        logger.error(f"Command processing error: {e}")
 
     def handle_command(self, command, chat_id):
         """Handle commands"""
