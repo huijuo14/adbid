@@ -15,7 +15,7 @@ class AdShareStealthBot:
         # Telegram credentials
         self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
         self.chat_id = "2052085789"
-        self.last_update_id = 0  # 🔧 FIX: Track last processed message
+        self.last_update_id = 0  # Track last processed message
         
         # AdShare credentials
         self.email = "loginallapps@gmail.com"
@@ -226,7 +226,7 @@ class AdShareStealthBot:
             return False
 
     def process_telegram_command(self):
-        """🔧 FIXED: Process ONLY new commands since last check"""
+        """Process ONLY new commands since last check"""
         try:
             # Get only NEW messages
             url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
@@ -433,7 +433,7 @@ Safety Skips: {self.stats['safety_skips']}
         self.send_telegram(help_msg)
 
     def parse_campaigns(self, html_content):
-        """Parse campaigns from HTML"""
+        """✅ FIXED: Extract clean campaign names without URLs"""
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             campaigns = {}
@@ -441,23 +441,38 @@ Safety Skips: {self.stats['safety_skips']}
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
             
             for div in campaign_divs:
-                lines = div.get_text().strip().split('\n')
-                campaign_name = lines[0].strip() if lines else "Unknown"
+                # Get all text and split by lines
+                text_content = div.get_text().strip()
+                lines = [line.strip() for line in text_content.split('\n') if line.strip()]
                 
-                if not campaign_name or campaign_name in ['leadsleap', 'My Advert']:
-                    campaign_name = lines[0].strip() if lines and lines[0].strip() else "Unknown"
-                
-                bid_match = re.search(r'Campaign Bid:\s*(\d+)', div.get_text())
-                my_bid = int(bid_match.group(1)) if bid_match else 0
-                
-                if campaign_name and my_bid > 0:
-                    campaigns[campaign_name] = {
-                        'my_bid': my_bid,
-                        'top_bid': my_bid,
-                        'auto_bid': False,  # Default OFF for safety
-                        'max_bid': self.default_max_bid,
-                        'last_checked': None
-                    }
+                if lines:
+                    # ✅ FIX: Extract ONLY the campaign name (before URL starts)
+                    first_line = lines[0]
+                    
+                    # Clean the name - stop at 'http' or 'www'
+                    if 'http' in first_line:
+                        campaign_name = first_line.split('http')[0].strip()
+                    elif 'www.' in first_line:
+                        campaign_name = first_line.split('www.')[0].strip()
+                    else:
+                        campaign_name = first_line
+                    
+                    # Remove any trailing special characters
+                    campaign_name = campaign_name.rstrip('.:- ')
+                    
+                    # Extract bid amount
+                    bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
+                    my_bid = int(bid_match.group(1)) if bid_match else 0
+                    
+                    if campaign_name and my_bid > 0:
+                        campaigns[campaign_name] = {
+                            'my_bid': my_bid,
+                            'top_bid': my_bid,
+                            'auto_bid': False,
+                            'max_bid': self.default_max_bid,
+                            'last_checked': None
+                        }
+                        logger.info(f"✅ Found clean campaign: '{campaign_name}' with bid {my_bid}")
             
             return campaigns
             
@@ -477,21 +492,24 @@ Safety Skips: {self.stats['safety_skips']}
             
             for link in increase_links:
                 campaign_div = link.find_parent('div', style=re.compile(r'border.*solid.*#8CC63F'))
-                if campaign_div and campaign_name in campaign_div.get_text():
-                    bid_url = link['href']
-                    if not bid_url.startswith('http'):
-                        bid_url = f"https://adsha.re{bid_url}"
-                    
-                    response = self.session.get(bid_url, timeout=30)
-                    self.human_delay(1, 3)  # Human-like delay
-                    
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    top_bid_text = soup.find(string=re.compile(r'top bid is \d+ credits'))
-                    
-                    if top_bid_text:
-                        match = re.search(r'top bid is (\d+) credits', top_bid_text)
-                        if match:
-                            return int(match.group(1))
+                if campaign_div:
+                    # Check if this campaign matches (using clean name)
+                    div_text = campaign_div.get_text()
+                    if campaign_name in div_text:
+                        bid_url = link['href']
+                        if not bid_url.startswith('http'):
+                            bid_url = f"https://adsha.re{bid_url}"
+                        
+                        response = self.session.get(bid_url, timeout=30)
+                        self.human_delay(1, 3)  # Human-like delay
+                        
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        top_bid_text = soup.find(string=re.compile(r'top bid is \d+ credits'))
+                        
+                        if top_bid_text:
+                            match = re.search(r'top bid is (\d+) credits', top_bid_text)
+                            if match:
+                                return int(match.group(1))
             
             return None
             
@@ -527,7 +545,7 @@ Safety Skips: {self.stats['safety_skips']}
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay(1, 3)
             
-            # Parse campaigns
+            # Parse campaigns with FIXED names
             self.campaigns = self.parse_campaigns(response.content)
             
             if not self.campaigns:
