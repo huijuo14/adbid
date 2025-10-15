@@ -47,14 +47,31 @@ class AdShareTracker:
                 logger.error(f"❌ Failed to get login page: {response.status_code}")
                 return False
             
+            # Parse the form to get dynamic action URL and field names
+            soup = BeautifulSoup(response.content, 'html.parser')
+            form = soup.find('form', {'name': 'login'})
+            
+            if not form:
+                logger.error("❌ Login form not found")
+                return False
+            
+            # Get the dynamic action URL from the form
+            action_url = form.get('action')
+            if not action_url.startswith('http'):
+                action_url = 'https://adsha.re' + action_url
+            
+            logger.info(f"🔐 Form action: {action_url}")
+            
+            # Prepare login data with CORRECT field names from HTML
             login_data = {
-                'email': self.email,
-                'password': self.password,
+                'mail': self.email,  # Field name is 'mail' not 'email'
+                '04ce63a75551c350478884bcd8e6530f': self.password  # Dynamic password field name
             }
             
             logger.info("🔐 Attempting login...")
-            response = self.session.post(login_url, data=login_data, timeout=30)
+            response = self.session.post(action_url, data=login_data, timeout=30, allow_redirects=True)
             
+            # Check if login was successful by accessing protected page
             test_url = "https://adsha.re/adverts/create"
             response = self.session.get(test_url, timeout=30)
             
@@ -62,7 +79,7 @@ class AdShareTracker:
                 logger.info("✅ Login successful!")
                 return True
             else:
-                logger.error("❌ Login failed")
+                logger.error(f"❌ Login failed - Status: {response.status_code}, URL: {response.url}")
                 return False
                 
         except Exception as e:
@@ -76,16 +93,17 @@ class AdShareTracker:
             logger.info("🔍 Fetching bid page...")
             response = self.session.get(create_url, timeout=30)
             
-            if response.status_code != 200:
-                if "login" in response.url:
-                    logger.info("🔄 Session expired, re-logging in...")
-                    if self.login_to_adshare():
-                        response = self.session.get(create_url, timeout=30)
-                    else:
-                        return None
+            # If redirected to login, session expired
+            if response.status_code != 200 or "login" in response.url:
+                logger.info("🔄 Session expired, re-logging in...")
+                if self.login_to_adshare():
+                    response = self.session.get(create_url, timeout=30)
+                else:
+                    return None
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
+            # Look for bid information
             for element in soup.find_all(string=re.compile(r'top bid is \d+ credits')):
                 match = re.search(r'top bid is (\d+) credits', element)
                 if match: 
@@ -93,6 +111,7 @@ class AdShareTracker:
                     logger.info(f"✅ Current bid: {bid} credits")
                     return bid
             
+            # Alternative search
             labels = soup.find_all('div', class_='label')
             for label in labels:
                 if 'top bid' in label.get_text():
