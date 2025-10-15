@@ -689,3 +689,25 @@ Safety Skips: {self.stats['safety_skips']}
 if __name__ == "__main__":
     bot = AdShareStealthBot()
     bot.run()
+# Add this to make it work as Web Service
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 AdShare Bot Running - Background Process Active"
+
+def run_bot():
+    bot = AdShareStealthBot()
+    bot.run()
+
+if __name__ == "__main__":
+    # Start bot in background thread
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Start Flask web server (for Render port)
+    app.run(host='0.0.0.0', port=10000, debug=False)
