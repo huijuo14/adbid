@@ -15,9 +15,7 @@ class AdShareStealthBot:
         # Telegram credentials
         self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
         self.chat_id = "2052085789"
-
-# 🔧 ADD THIS LINE:
-self.last_update_id = 0  # Track last processed message
+        self.last_update_id = 0  # 🔧 FIX: Track last processed message
         
         # AdShare credentials
         self.email = "loginallapps@gmail.com"
@@ -34,7 +32,6 @@ self.last_update_id = 0  # Track last processed message
         # Bot settings
         self.is_monitoring = False
         self.base_check_interval = 600  # 10 minutes base
-        self.last_update_id = 0
         
         # Auto-bid settings
         self.campaigns = {}
@@ -229,41 +226,41 @@ self.last_update_id = 0  # Track last processed message
             return False
 
     def process_telegram_command(self):
-    """Process ONLY new commands since last check"""
-    try:
-        # Get only NEW messages
-        url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
-        params = {
-            'offset': self.last_update_id + 1,  # Only get new messages
-            'timeout': 5
-        }
-        
-        response = self.session.get(url, params=params, timeout=10)
-        data = response.json()
-        
-        if data.get('ok') and data.get('result'):
-            for update in data['result']:
-                update_id = update['update_id']
-                
-                # Update tracking FIRST
-                if update_id > self.last_update_id:
-                    self.last_update_id = update_id
-                
-                # Process command
-                if 'message' in update and 'text' in update['message']:
-                    text = update['message']['text']
-                    chat_id = update['message']['chat']['id']
+        """🔧 FIXED: Process ONLY new commands since last check"""
+        try:
+            # Get only NEW messages
+            url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+            params = {
+                'offset': self.last_update_id + 1,  # Only get new messages
+                'timeout': 5
+            }
+            
+            response = self.session.get(url, params=params, timeout=10)
+            data = response.json()
+            
+            if data.get('ok') and data.get('result'):
+                for update in data['result']:
+                    update_id = update['update_id']
                     
-                    # 🔒 SECURITY: Only process messages from OUR chat
-                    if str(chat_id) != self.chat_id:
-                        continue
+                    # Update tracking FIRST
+                    if update_id > self.last_update_id:
+                        self.last_update_id = update_id
+                    
+                    # Process command
+                    if 'message' in update and 'text' in update['message']:
+                        text = update['message']['text']
+                        chat_id = update['message']['chat']['id']
                         
-                    if text.startswith('/'):
-                        logger.info(f"📨 Processing: {text}")
-                        self.handle_command(text, chat_id)
-                        
-    except Exception as e:
-        logger.error(f"Command processing error: {e}")
+                        # 🔒 SECURITY: Only process messages from OUR chat
+                        if str(chat_id) != self.chat_id:
+                            continue
+                            
+                        if text.startswith('/'):
+                            logger.info(f"📨 Processing: {text}")
+                            self.handle_command(text, chat_id)
+                            
+        except Exception as e:
+            logger.error(f"Command processing error: {e}")
 
     def handle_command(self, command, chat_id):
         """Handle commands"""
@@ -325,7 +322,7 @@ self.last_update_id = 0  # Track last processed message
         self.is_monitoring = True
         self.stats['start_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         logger.info("🚀 Stealth monitoring started")
-        self.send_telegram("🚀 <b>Stealth Bot Activated!</b>\nUltra-safe mode enabled with anti-detection features.")
+        self.send_telegram("🚀 <b>Stealth Bot Activated!</b>\nMonitoring started with anti-detection features.")
 
     def stop_monitoring(self):
         """Stop monitoring"""
