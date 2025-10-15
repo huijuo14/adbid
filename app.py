@@ -38,8 +38,8 @@ class AdShareStealthBot:
         self.default_max_bid = 180
         
         # Safety settings
-        self.daily_action_limit = 50  # Max actions per day
-        self.min_delay_between_actions = 2  # Seconds
+        self.daily_action_limit = 50
+        self.min_delay_between_actions = 2
         self.max_delay_between_actions = 8
         
         # Statistics
@@ -65,7 +65,7 @@ class AdShareStealthBot:
         })
 
     def human_delay(self, min_seconds=None, max_seconds=None):
-        """Random delay between actions to mimic human behavior"""
+        """Random delay between actions"""
         min_delay = min_seconds or self.min_delay_between_actions
         max_delay = max_seconds or self.max_delay_between_actions
         delay = random.uniform(min_delay, max_delay)
@@ -74,46 +74,38 @@ class AdShareStealthBot:
 
     def get_random_check_interval(self):
         """Random check interval between 8-15 minutes"""
-        return random.randint(480, 900)  # 8-15 minutes
+        return random.randint(480, 900)
 
     def calculate_smart_bid(self, current_top_bid, my_bid, campaign_name):
-        """Smart bidding strategy with randomization"""
-        # Base increment (weighted toward +2)
-        weights = [1, 2, 2, 2, 3, 3, 4]  # Favor +2, sometimes +3/+4
+        """Smart bidding strategy"""
+        weights = [1, 2, 2, 2, 3, 3, 4]
         base_increment = random.choice(weights)
         
-        # Occasional strategic overbid (10% chance)
         if random.random() < 0.1:
             base_increment += random.randint(2, 4)
             logger.info(f"🎯 Strategic overbid for {campaign_name}")
         
         new_bid = current_top_bid + base_increment
-        
-        # Ensure we don't exceed max bid
         campaign_max = self.campaigns[campaign_name].get('max_bid', self.default_max_bid)
         return min(new_bid, campaign_max)
 
     def should_skip_action(self, action_type="check"):
-        """Safety check - should we skip this action?"""
-        # Reset daily counter if new day
+        """Safety check - skip action if needed"""
         current_hour = datetime.now().hour
         if current_hour == 0 and self.action_count_today > 0:
             self.action_count_today = 0
             logger.info("🔄 Daily action counter reset")
         
-        # Daily action limit
         if self.action_count_today >= self.daily_action_limit:
             logger.warning(f"⏹️ Daily action limit reached ({self.daily_action_limit})")
             return True
         
-        # Strategic skip (15% chance for bids, 5% for checks)
         skip_chance = 0.15 if action_type == "bid" else 0.05
         if random.random() < skip_chance:
             self.stats['safety_skips'] += 1
             logger.info(f"🎯 Safety skip: {action_type}")
             return True
         
-        # Time since last action
         time_since_last = time.time() - self.last_action_time
         if time_since_last < self.min_delay_between_actions:
             return True
@@ -121,27 +113,23 @@ class AdShareStealthBot:
         return False
 
     def occasional_long_break(self):
-        """Take occasional long breaks like a human would"""
-        if random.random() < 0.03:  # 3% chance per check
-            break_minutes = random.randint(30, 240)  # 30min to 4hr break
+        """Take occasional long breaks"""
+        if random.random() < 0.03:
+            break_minutes = random.randint(30, 240)
             logger.info(f"😴 Taking human-like break: {break_minutes} minutes")
-            self.send_telegram(f"😴 <b>Taking a break</b>\nBack in {break_minutes} minutes (human-like pattern)")
+            self.send_telegram(f"😴 <b>Taking a break</b>\nBack in {break_minutes} minutes")
             time.sleep(break_minutes * 60)
             return True
         return False
 
     def smart_login(self):
-        """Ultra-safe login with human-like patterns"""
-        # Check if current session is still valid
+        """Ultra-safe login"""
         if self.check_session_valid():
             self.session_valid = True
             logger.info("✅ Session valid, reusing")
             return True
         
-        # Safety delay before login
         self.human_delay(3, 7)
-        
-        # Only login when session is completely dead
         logger.info("🔐 Session expired, performing fresh login")
         return self.force_login()
 
@@ -163,20 +151,17 @@ class AdShareStealthBot:
             return False
 
     def force_login(self):
-        """Safe login with randomization"""
+        """Safe login"""
         try:
             logger.info("🔄 Performing safe login...")
-            
-            # Random delay before login
             self.human_delay(2, 5)
             
-            # Rotate user agent occasionally
             if random.random() < 0.3:
                 self.rotate_user_agent()
             
             login_url = "https://adsha.re/login"
             response = self.session.get(login_url, timeout=30)
-            self.human_delay(1, 3)  # Human-like reading time
+            self.human_delay(1, 3)
             
             soup = BeautifulSoup(response.content, 'html.parser')
             form = soup.find('form', {'name': 'login'})
@@ -192,7 +177,7 @@ class AdShareStealthBot:
             }
             
             response = self.session.post(post_url, data=login_data, allow_redirects=True)
-            self.human_delay(2, 4)  # Human-like delay after login
+            self.human_delay(2, 4)
             
             if self.check_session_valid():
                 self.session_valid = True
@@ -226,12 +211,11 @@ class AdShareStealthBot:
             return False
 
     def process_telegram_command(self):
-        """Process ONLY new commands since last check"""
+        """FIXED: Process commands without duplicates"""
         try:
-            # Get only NEW messages
             url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
             params = {
-                'offset': self.last_update_id + 1,  # Only get new messages
+                'offset': self.last_update_id + 1,
                 'timeout': 5
             }
             
@@ -242,80 +226,115 @@ class AdShareStealthBot:
                 for update in data['result']:
                     update_id = update['update_id']
                     
-                    # Update tracking FIRST
+                    # CRITICAL FIX: Only process NEW updates
                     if update_id > self.last_update_id:
                         self.last_update_id = update_id
-                    
-                    # Process command
-                    if 'message' in update and 'text' in update['message']:
-                        text = update['message']['text']
-                        chat_id = update['message']['chat']['id']
                         
-                        # 🔒 SECURITY: Only process messages from OUR chat
-                        if str(chat_id) != self.chat_id:
-                            continue
+                        if 'message' in update and 'text' in update['message']:
+                            text = update['message']['text']
+                            chat_id = update['message']['chat']['id']
                             
-                        if text.startswith('/'):
-                            logger.info(f"📨 Processing: {text}")
-                            self.handle_command(text, chat_id)
+                            if str(chat_id) != self.chat_id:
+                                continue
+                                
+                            if text.startswith('/'):
+                                logger.info(f"📨 Processing: {text}")
+                                self.handle_command(text, chat_id)
                             
         except Exception as e:
             logger.error(f"Command processing error: {e}")
 
     def handle_command(self, command, chat_id):
-        """Handle commands"""
-        command = command.lower().strip()
+        """Handle commands - NO DUPLICATES"""
+        command_lower = command.lower().strip()
         
-        if command == '/start':
+        if command_lower == '/start':
             self.start_monitoring()
             
-        elif command == '/stop':
+        elif command_lower == '/stop':
             self.stop_monitoring()
             
-        elif command == '/status':
+        elif command_lower == '/status':
             self.send_status()
             
-        elif command.startswith('/auto'):
+        elif command_lower.startswith('/auto'):
             self.handle_auto_command(command)
             
-        elif command == '/campaigns':
+        elif command_lower == '/campaigns':
             self.send_campaigns_list()
             
-        elif command == '/safety':
+        elif command_lower == '/safety':
             self.send_safety_status()
             
-        elif command == '/help':
+        elif command_lower == '/help':
             self.send_help()
             
         else:
             self.send_telegram("❌ Unknown command. Use /help for available commands.")
 
     def handle_auto_command(self, command):
-        """Handle auto-bid commands"""
+        """FIXED: Case-insensitive campaign matching"""
         parts = command.split()
         
         if len(parts) == 1:
-            self.send_telegram("❌ Usage: /auto [campaign] on/off\nExample: /auto My Advert on")
+            self.send_telegram("❌ Usage: /auto [campaign] on/off\nExample: /auto \"My Advert\" on")
             return
             
-        if len(parts) == 2 and parts[1] in ['on', 'off']:
+        if len(parts) == 2 and parts[1].lower() in ['on', 'off']:
+            action = parts[1].lower()
             for campaign_name in self.campaigns:
-                self.campaigns[campaign_name]['auto_bid'] = (parts[1] == 'on')
+                self.campaigns[campaign_name]['auto_bid'] = (action == 'on')
             
-            status = "enabled" if parts[1] == 'on' else "disabled"
+            status = "enabled" if action == 'on' else "disabled"
             self.send_telegram(f"🔄 <b>Auto-bid {status} for all campaigns</b>")
             return
             
         if len(parts) >= 3:
-            campaign_name = ' '.join(parts[1:-1])
-            action = parts[-1]
-            
-            if campaign_name in self.campaigns:
-                self.campaigns[campaign_name]['auto_bid'] = (action == 'on')
-                status = "enabled" if action == 'on' else "disabled"
-                self.send_telegram(f"🔄 <b>Auto-bid {status} for '{campaign_name}'</b>")
+            # Extract campaign name (handle quoted names)
+            if command.count('"') >= 2:
+                # Handle quoted campaign names like: /auto "My Advert" on
+                import shlex
+                try:
+                    parsed = shlex.split(command)
+                    if len(parsed) >= 3:
+                        campaign_name = parsed[1]
+                        action = parsed[2].lower()
+                    else:
+                        self.send_telegram("❌ Invalid format. Use: /auto \"Campaign Name\" on")
+                        return
+                except:
+                    campaign_name = ' '.join(parts[1:-1])
+                    action = parts[-1].lower()
             else:
-                self.send_telegram(f"❌ Campaign '{campaign_name}' not found. Use /campaigns to see available campaigns.")
+                campaign_name = ' '.join(parts[1:-1])
+                action = parts[-1].lower()
+            
+            if action not in ['on', 'off']:
+                self.send_telegram("❌ Action must be 'on' or 'off'")
+                return
+            
+            # FIXED: Case-insensitive matching
+            found_campaign = None
+            for stored_name in self.campaigns.keys():
+                if stored_name.lower() == campaign_name.lower():
+                    found_campaign = stored_name
+                    break
+            
+            if found_campaign:
+                self.campaigns[found_campaign]['auto_bid'] = (action == 'on')
+                status = "enabled" if action == 'on' else "disabled"
+                self.send_telegram(f"🔄 <b>Auto-bid {status} for '{found_campaign}'</b>")
+                
+                # Update the stored name to match exactly what user typed (for consistency)
+                if found_campaign != campaign_name:
+                    self.campaigns[campaign_name] = self.campaigns.pop(found_campaign)
+            else:
+                available = list(self.campaigns.keys())
+                if available:
+                    available_str = "\n".join([f"• {name}" for name in available])
+                    self.send_telegram(f"❌ Campaign '{campaign_name}' not found.\n\nAvailable campaigns:\n{available_str}")
+                else:
+                    self.send_telegram("❌ No campaigns found. Send /start to load campaigns.")
 
     def start_monitoring(self):
         """Start monitoring"""
@@ -331,7 +350,7 @@ class AdShareStealthBot:
         self.send_telegram("🛑 <b>Stealth Bot Stopped!</b>")
 
     def send_status(self):
-        """Send status with safety info"""
+        """Send status"""
         if not self.campaigns:
             status_msg = """
 📊 <b>Stealth Bot Status</b>
@@ -339,7 +358,7 @@ class AdShareStealthBot:
 🔄 <b>Monitoring:</b> ❌ Inactive
 🛡️ <b>Safety Mode:</b> ✅ Ultra-Safe
 
-💡 <b>Send /start to begin stealth monitoring</b>
+💡 <b>Send /start to begin monitoring</b>
             """
         else:
             campaigns_list = ""
@@ -352,33 +371,31 @@ class AdShareStealthBot:
 
 🔄 <b>Monitoring:</b> {'✅ Active' if self.is_monitoring else '❌ Inactive'}
 🛡️ <b>Safety Mode:</b> ✅ Ultra-Safe
-⏰ <b>Check Interval:</b> 8-15 minutes (randomized)
+⏰ <b>Check Interval:</b> 8-15 minutes
 🔐 <b>Session:</b> {'✅ Valid' if self.session_valid else '❌ Expired'}
 
 <b>Campaigns:</b>
 {campaigns_list}
 
-<b>Safety Stats:</b>
-📈 Checks Made: {self.stats['checks_made']}
+<b>Stats:</b>
+📈 Checks: {self.stats['checks_made']}
 🤖 Auto Bids: {self.stats['auto_bids_made']}
 🎯 Safety Skips: {self.stats['safety_skips']}
-🔐 Logins: {self.stats['logins_made']}
-📊 Actions Today: {self.action_count_today}/{self.daily_action_limit}
             """
         self.send_telegram(status_msg)
 
     def send_safety_status(self):
-        """Send detailed safety status"""
+        """Send safety status"""
         safety_msg = f"""
 🛡️ <b>ULTRA-SAFE STEALTH MODE</b>
 
 ✅ <b>Active Safety Features:</b>
 • Randomized check intervals (8-15 minutes)
 • Smart bid increments (1-4, weighted +2)
-• Human-like delays (2-8 seconds between actions)
+• Human-like delays (2-8 seconds)
 • Strategic skipping (15% chance)
 • Daily action limit ({self.daily_action_limit})
-• Occasional long breaks (30min-4hr)
+• Occasional long breaks
 • User-agent rotation
 • Session persistence
 
@@ -391,7 +408,7 @@ Safety Skips: {self.stats['safety_skips']}
         self.send_telegram(safety_msg)
 
     def send_campaigns_list(self):
-        """Send list of campaigns"""
+        """FIXED: Show campaigns with exact commands"""
         if not self.campaigns:
             self.send_telegram("📊 <b>No campaigns loaded yet.</b>\nSend /start to begin monitoring.")
             return
@@ -402,38 +419,36 @@ Safety Skips: {self.stats['safety_skips']}
             campaigns_msg += f"<b>{name}</b>\n"
             campaigns_msg += f"Your Bid: {data['my_bid']} credits\n"
             campaigns_msg += f"Auto-Bid: {auto_status}\n"
-            campaigns_msg += f"Command: <code>/auto {name} on/off</code>\n\n"
+            campaigns_msg += f"<b>Command:</b> <code>/auto \"{name}\" on</code>\n\n"
         
-        campaigns_msg += "💡 <b>Enable auto-bid:</b> <code>/auto Campaign Name on</code>"
+        campaigns_msg += "💡 <b>Copy & paste the exact command above</b>"
         self.send_telegram(campaigns_msg)
 
     def send_help(self):
-        """Send help message"""
+        """Send help"""
         help_msg = """
 🤖 <b>Stealth Auto-Bid Bot</b>
 
-/start - Start stealth monitoring
-/stop - Stop monitoring
+/start - Start monitoring
+/stop - Stop monitoring  
 /status - Current status
-/campaigns - List your campaigns
-/safety - Show safety features
+/campaigns - List campaigns
+/safety - Safety features
 
 <b>Auto-Bid Commands:</b>
-/auto all on - Enable auto-bid for all
-/auto all off - Disable auto-bid for all  
-/auto "My Advert" on - Enable for specific campaign
+/auto all on - Enable all
+/auto all off - Disable all
+/auto "My Advert" on - Enable specific
 
-<b>Safety Features:</b>
-🛡️ Randomized timing
-🛡️ Smart bid increments  
-🛡️ Human-like patterns
-🛡️ Daily action limits
-🛡️ Strategic skipping
+<b>Examples:</b>
+<code>/auto "My Advert" on</code>
+<code>/auto all on</code>
+<code>/auto leadsleap off</code>
         """
         self.send_telegram(help_msg)
 
     def parse_campaigns(self, html_content):
-        """✅ FIXED: Extract clean campaign names without URLs"""
+        """FIXED: Extract clean campaign names"""
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             campaigns = {}
@@ -441,15 +456,13 @@ Safety Skips: {self.stats['safety_skips']}
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
             
             for div in campaign_divs:
-                # Get all text and split by lines
                 text_content = div.get_text().strip()
                 lines = [line.strip() for line in text_content.split('\n') if line.strip()]
                 
                 if lines:
-                    # ✅ FIX: Extract ONLY the campaign name (before URL starts)
                     first_line = lines[0]
                     
-                    # Clean the name - stop at 'http' or 'www'
+                    # Extract clean name (stop at URL)
                     if 'http' in first_line:
                         campaign_name = first_line.split('http')[0].strip()
                     elif 'www.' in first_line:
@@ -457,10 +470,10 @@ Safety Skips: {self.stats['safety_skips']}
                     else:
                         campaign_name = first_line
                     
-                    # Remove any trailing special characters
+                    # Clean up name
                     campaign_name = campaign_name.rstrip('.:- ')
                     
-                    # Extract bid amount
+                    # Extract bid
                     bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                     my_bid = int(bid_match.group(1)) if bid_match else 0
                     
@@ -472,7 +485,7 @@ Safety Skips: {self.stats['safety_skips']}
                             'max_bid': self.default_max_bid,
                             'last_checked': None
                         }
-                        logger.info(f"✅ Found clean campaign: '{campaign_name}' with bid {my_bid}")
+                        logger.info(f"✅ Found: '{campaign_name}' - {my_bid} credits")
             
             return campaigns
             
@@ -481,35 +494,32 @@ Safety Skips: {self.stats['safety_skips']}
             return {}
 
     def get_top_bid_from_bid_page(self, campaign_name):
-        """Get top bid from increase bid page"""
+        """Get top bid from bid page"""
         try:
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
-            self.human_delay(1, 3)  # Human-like delay
+            self.human_delay(1, 3)
             
             soup = BeautifulSoup(response.content, 'html.parser')
             increase_links = soup.find_all('a', href=re.compile(r'/adverts/bid/'))
             
             for link in increase_links:
                 campaign_div = link.find_parent('div', style=re.compile(r'border.*solid.*#8CC63F'))
-                if campaign_div:
-                    # Check if this campaign matches (using clean name)
-                    div_text = campaign_div.get_text()
-                    if campaign_name in div_text:
-                        bid_url = link['href']
-                        if not bid_url.startswith('http'):
-                            bid_url = f"https://adsha.re{bid_url}"
-                        
-                        response = self.session.get(bid_url, timeout=30)
-                        self.human_delay(1, 3)  # Human-like delay
-                        
-                        soup = BeautifulSoup(response.content, 'html.parser')
-                        top_bid_text = soup.find(string=re.compile(r'top bid is \d+ credits'))
-                        
-                        if top_bid_text:
-                            match = re.search(r'top bid is (\d+) credits', top_bid_text)
-                            if match:
-                                return int(match.group(1))
+                if campaign_div and campaign_name in campaign_div.get_text():
+                    bid_url = link['href']
+                    if not bid_url.startswith('http'):
+                        bid_url = f"https://adsha.re{bid_url}"
+                    
+                    response = self.session.get(bid_url, timeout=30)
+                    self.human_delay(1, 3)
+                    
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    top_bid_text = soup.find(string=re.compile(r'top bid is \d+ credits'))
+                    
+                    if top_bid_text:
+                        match = re.search(r'top bid is (\d+) credits', top_bid_text)
+                        if match:
+                            return int(match.group(1))
             
             return None
             
@@ -518,15 +528,13 @@ Safety Skips: {self.stats['safety_skips']}
             return None
 
     def check_all_campaigns(self):
-        """Safe campaign checking with anti-detection"""
+        """Check campaigns"""
         if not self.is_monitoring:
             return
             
-        # Safety: Skip action if needed
         if self.should_skip_action("check"):
             return
             
-        # Safety: Occasional long break
         if self.occasional_long_break():
             return
             
@@ -534,25 +542,21 @@ Safety Skips: {self.stats['safety_skips']}
         self.action_count_today += 1
         self.last_action_time = time.time()
         
-        # Ultra-safe login
         if not self.smart_login():
             logger.error("❌ Cannot login, skipping check")
             return
         
         try:
-            # Get adverts page
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay(1, 3)
             
-            # Parse campaigns with FIXED names
             self.campaigns = self.parse_campaigns(response.content)
             
             if not self.campaigns:
                 logger.warning("No campaigns found")
                 return
             
-            # Check each campaign
             for campaign_name, campaign_data in self.campaigns.items():
                 top_bid = self.get_top_bid_from_bid_page(campaign_name)
                 
@@ -562,7 +566,6 @@ Safety Skips: {self.stats['safety_skips']}
                     
                     logger.info(f"📊 {campaign_name}: Your {campaign_data['my_bid']}, Top {top_bid}")
                     
-                    # Safe auto-bid logic
                     if (campaign_data['auto_bid'] and 
                         top_bid > campaign_data['my_bid'] and 
                         not self.should_skip_action("bid")):
@@ -571,21 +574,17 @@ Safety Skips: {self.stats['safety_skips']}
                         
         except Exception as e:
             logger.error(f"Error checking campaigns: {e}")
-            self.send_telegram(f"❌ <b>Check Error:</b>\n{str(e)}")
 
     def execute_safe_auto_bid(self, campaign_name, campaign_data, current_top_bid):
-        """Execute auto-bid with safety checks"""
+        """Execute auto-bid"""
         try:
-            # Calculate smart bid
             new_bid = self.calculate_smart_bid(current_top_bid, campaign_data['my_bid'], campaign_name)
             
-            # Check max bid limit
             if new_bid > campaign_data['max_bid']:
                 logger.info(f"⏹️ {campaign_name}: Max bid reached")
                 self.send_telegram(f"⏹️ <b>Max Bid Reached!</b>\n{campaign_name} at max {campaign_data['max_bid']} credits")
                 return
             
-            # Find increase bid URL
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay(1, 3)
@@ -606,7 +605,6 @@ Safety Skips: {self.stats['safety_skips']}
                 logger.error(f"❌ No bid URL for {campaign_name}")
                 return
             
-            # Submit bid increase
             response = self.session.get(bid_url, timeout=30)
             self.human_delay(1, 3)
             
@@ -621,32 +619,28 @@ Safety Skips: {self.stats['safety_skips']}
             if not action.startswith('http'):
                 action = f"https://adsha.re{action}"
             
-            # Submit with human-like delay
             bid_data = {'bid': str(new_bid), 'vis': '0'}
             self.human_delay(2, 5)
             
             response = self.session.post(action, data=bid_data, allow_redirects=True)
             
-            # Verify success
             if response.status_code == 200:
                 self.stats['auto_bids_made'] += 1
                 self.action_count_today += 1
                 self.stats['last_auto_bid'] = datetime.now().strftime('%H:%M:%S')
                 campaign_data['my_bid'] = new_bid
                 
-                logger.info(f"🚀 SAFE AUTO-BID: {campaign_name} → {new_bid}")
+                logger.info(f"🚀 AUTO-BID: {campaign_name} → {new_bid}")
                 
-                # Success message
                 success_msg = f"""
-🚀 <b>SAFE AUTO-BID SUCCESS!</b>
+🚀 <b>AUTO-BID SUCCESS!</b>
 
 📊 <b>Campaign:</b> {campaign_name}
 🎯 <b>Bid:</b> {campaign_data['my_bid']} → {new_bid} credits
-📈 <b>Strategy:</b> Smart increment (not fixed +2)
+📈 <b>Strategy:</b> Smart increment
 💰 <b>Max Bid:</b> {campaign_data['max_bid']} credits
-🛡️ <b>Safety:</b> Ultra-stealth mode active
 
-✅ <b>Now at #1 position - SAFELY!</b>
+✅ <b>Now at #1 position!</b>
                 """
                 self.send_telegram(success_msg)
             else:
@@ -654,18 +648,16 @@ Safety Skips: {self.stats['safety_skips']}
                 
         except Exception as e:
             logger.error(f"❌ Auto-bid error: {e}")
-            self.send_telegram(f"❌ <b>Auto-Bid Error:</b>\n{str(e)}")
 
     def run(self):
-        """Main loop with ultra-safety"""
+        """Main loop"""
         logger.info("🤖 Starting Ultra-Safe Stealth Bot...")
         
-        # Initial safe login
         if not self.force_login():
             logger.error("❌ Initial login failed")
             return
         
-        self.send_telegram("🛡️ <b>Ultra-Safe Stealth Bot Activated!</b>\nAnti-detection features enabled.\nUse /start to begin monitoring.")
+        self.send_telegram("🛡️ <b>Ultra-Safe Stealth Bot Activated!</b>\nUse /start to begin monitoring.")
         
         last_command_check = 0
         last_campaign_check = 0
@@ -675,12 +667,10 @@ Safety Skips: {self.stats['safety_skips']}
             try:
                 current_time = time.time()
                 
-                # Process commands every 3 seconds
                 if current_time - last_command_check >= 3:
                     self.process_telegram_command()
                     last_command_check = current_time
                 
-                # Check campaigns with random intervals
                 if (self.is_monitoring and 
                     current_time - last_campaign_check >= next_check_interval):
                     
@@ -689,7 +679,7 @@ Safety Skips: {self.stats['safety_skips']}
                     next_check_interval = self.get_random_check_interval()
                     logger.info(f"⏰ Next check in {next_check_interval//60} minutes")
                 
-                time.sleep(1)  # 1 second base loop
+                time.sleep(1)
                 
             except Exception as e:
                 logger.error(f"❌ Main loop error: {e}")
