@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import time
 import re
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,10 +24,6 @@ class AdShareAutoBidBot:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         })
-        
-        # Smart login settings - MINIMIZE LOGINS!
-        self.last_login = None
-        self.login_interval = 7200  # Only re-login every 2 hours (7200 seconds)
         self.session_valid = False
         self.consecutive_failures = 0
         
@@ -51,41 +47,33 @@ class AdShareAutoBidBot:
 
     def smart_login(self):
         """
-        SMART LOGIN: Only login when absolutely necessary
-        - Reuses existing session as long as possible
-        - Only re-logins every 2 hours or when session expires
-        - Avoids breaking your other browser sessions
+        ULTRA-MINIMAL LOGIN: Only login when session is completely expired
+        - Reuses session for DAYS if possible
+        - Only re-logins when server forces logout
+        - Maximum session preservation
         """
-        # If we recently logged in and session is still valid, reuse it
-        if self.last_login and self.session_valid:
-            time_since_login = (datetime.now() - self.last_login).total_seconds()
-            if time_since_login < self.login_interval:
-                logger.info("♻️ Using existing session")
-                return True
-        
-        # Check if current session is still valid without logging in
+        # Check if current session is still valid
         if self.check_session_valid():
             self.session_valid = True
-            self.last_login = datetime.now()  # Refresh last login time
-            logger.info("✅ Session still valid, reusing")
+            logger.info("✅ Session valid, reusing")
             return True
         
-        # Only now do we actually login
+        # Only login when session is completely dead
         logger.info("🔐 Session expired, performing fresh login")
         return self.force_login()
 
     def check_session_valid(self):
-        """Check if current session is still valid without making noise"""
+        """Lightweight check if session is still alive"""
         try:
-            # Use a lightweight check that doesn't look like a full page load
+            # Quick check that doesn't look like a full page load
             response = self.session.get("https://adsha.re/adverts", timeout=10, allow_redirects=False)
             
-            # If we get redirected to login, session is invalid
-            if response.status_code == 302 or "login" in response.headers.get('Location', ''):
+            # If redirected to login, session is dead
+            if response.status_code == 302 and "login" in response.headers.get('Location', ''):
                 self.session_valid = False
                 return False
             
-            # If we can access the adverts page, session is valid
+            # If we get the page, session is alive
             self.session_valid = True
             return True
             
@@ -95,9 +83,9 @@ class AdShareAutoBidBot:
             return False
 
     def force_login(self):
-        """Perform fresh login only when absolutely necessary"""
+        """Only login when session is completely dead"""
         try:
-            logger.info("🔄 Performing fresh login...")
+            logger.info("🔄 Session dead, performing fresh login...")
             
             # Get login page
             login_url = "https://adsha.re/login"
@@ -128,7 +116,6 @@ class AdShareAutoBidBot:
             
             # Verify login
             if self.check_session_valid():
-                self.last_login = datetime.now()
                 self.session_valid = True
                 self.stats['logins_made'] += 1
                 self.consecutive_failures = 0
@@ -136,7 +123,7 @@ class AdShareAutoBidBot:
                 return True
             else:
                 self.consecutive_failures += 1
-                logger.error(f"❌ Login failed (Consecutive failures: {self.consecutive_failures})")
+                logger.error(f"❌ Login failed")
                 return False
                 
         except Exception as e:
@@ -402,7 +389,7 @@ Increment: +2 above top bid
             
         self.stats['checks_made'] += 1
         
-        # SMART LOGIN: Only login when needed
+        # ULTRA-MINIMAL LOGIN: Only login when session is completely dead
         if not self.smart_login():
             logger.error("❌ Cannot login, skipping check")
             return
@@ -518,7 +505,7 @@ Increment: +2 above top bid
             logger.error(f"❌ Auto-bid error for {campaign_name}: {e}")
 
     def run(self):
-        """Main bot loop with SMART session management"""
+        """Main bot loop with ULTRA-MINIMAL session management"""
         logger.info("🤖 Starting AdShare Auto-Bid Bot...")
         
         # Initial login
