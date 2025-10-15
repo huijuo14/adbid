@@ -48,7 +48,7 @@ class AdShareStealthBot:
         
         # Auto-bid settings
         self.campaigns = {}
-        self.default_max_bid = 180
+        self.default_max_bid = 369
         
         # Safety settings
         self.daily_action_limit = 50
@@ -88,7 +88,7 @@ class AdShareStealthBot:
 
     def calculate_smart_bid(self, current_top_bid, my_bid, campaign_name):
         """Smart bidding strategy"""
-        weights = [1, 2, 2, 2, 3, 3, 4]
+        weights = [1, 1, 1, 2, 2, 3, 3]
         base_increment = random.choice(weights)
         
         if random.random() < 0.1:
