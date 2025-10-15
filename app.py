@@ -25,6 +25,8 @@ def health():
 
 class UltimateSmartBidder:
     def __init__(self):
+        # === CONFIGURABLE SETTINGS ===
+        
         # Telegram credentials
         self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
         self.chat_id = "2052085789"
@@ -33,6 +35,32 @@ class UltimateSmartBidder:
         # AdShare credentials
         self.email = "loginallapps@gmail.com"
         self.password = "@Sd2007123"
+        
+        # Bidding strategy
+        self.minimal_bid_weights = [1, 1, 1, 2, 2, 2, 2]  # +1/+2 weights
+        self.random_hold_range = (60, 420)  # 1-7 minutes
+        
+        # Frequency settings
+        self.frequency_modes = {
+            'aggressive': {'min': 120, 'max': 180},    # 2-3 minutes
+            'conservative': {'min': 900, 'max': 1200}, # 15-20 minutes
+            'current_mode': 'conservative'
+        }
+        
+        # Target settings
+        self.top_bidder_tracking = {
+            'daily_target_minutes': random.randint(480, 600),  # 8-10 hours
+            'current_minutes_today': 0,
+            'last_reset_date': datetime.now().date(),
+            'current_session_start': None,
+            'is_currently_top': False
+        }
+        
+        # Credit safety settings
+        self.visitor_alert_threshold = 1000  # Alert when below this
+        self.visitor_stop_threshold = 500    # Stop bidding when below this
+        
+        # === END CONFIGURABLE SETTINGS ===
         
         # Session management
         self.session = requests.Session()
@@ -43,31 +71,21 @@ class UltimateSmartBidder:
         self.is_monitoring = False
         self.campaigns = {}
         
-        # Smart features
-        self.top_bidder_tracking = {
-            'daily_target_minutes': random.randint(480, 600),
-            'current_minutes_today': 0,
-            'last_reset_date': datetime.now().date(),
-            'current_session_start': None,
-            'is_currently_top': False
-        }
+        # Credit balances
+        self.current_traffic_credits = 0
+        self.current_visitor_credits = 0
+        self.last_credit_alert = None
         
-        self.frequency_modes = {
-            'aggressive': {'min': 120, 'max': 180},
-            'conservative': {'min': 900, 'max': 1200},
-            'current_mode': 'conservative'
-        }
-        
-        # Enhanced views analytics
-        self.views_analytics = {
+        # Performance analytics
+        self.performance_analytics = {
+            'bid_attempts': 0,
+            'bid_successes': 0,
+            'views_when_top': [],
+            'views_when_not_top': [],
             'hourly_views': {},
-            'peak_hours': [],
-            'campaign_history': {},
-            'daily_views': {}
+            'peak_hours': [14, 15, 16, 11],  # 2PM, 3PM, 4PM, 11AM IST
+            'today_views': 0
         }
-        
-        self.minimal_bid_weights = [1, 1, 1, 2, 2, 2, 2]
-        self.random_hold_range = (60, 420)
         
         # Statistics
         self.stats = {
@@ -91,6 +109,62 @@ class UltimateSmartBidder:
         delay = random.uniform(min_seconds, max_seconds)
         time.sleep(delay)
         return delay
+
+    def get_traffic_credits(self):
+        """Get traffic credits balance from exchange page"""
+        try:
+            response = self.session.get("https://adsha.re/exchange/credits/adverts", timeout=30)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find the credit balance in the HTML
+            credit_div = soup.find('div', style=re.compile(r'font-size:22pt'))
+            if credit_div:
+                credit_text = credit_div.get_text().strip()
+                # Extract number like "1.5"
+                credit_match = re.search(r'(\d+\.?\d*)', credit_text)
+                if credit_match:
+                    return float(credit_match.group(1))
+            return 0
+        except Exception as e:
+            logger.error(f"Error getting traffic credits: {e}")
+            return 0
+
+    def get_visitor_credits(self):
+        """Get available visitors from adverts page"""
+        try:
+            response = self.session.get("https://adsha.re/adverts", timeout=30)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find "Visitors: 992" text
+            visitors_match = re.search(r'Visitors:\s*(\d+)', soup.get_text())
+            if visitors_match:
+                return int(visitors_match.group(1))
+            return 0
+        except Exception as e:
+            logger.error(f"Error getting visitor credits: {e}")
+            return 0
+
+    def check_credit_safety(self):
+        """Check if credits are sufficient for bidding"""
+        # Update credit balances
+        self.current_traffic_credits = self.get_traffic_credits()
+        self.current_visitor_credits = self.get_visitor_credits()
+        
+        # Check visitor credits for alerts
+        if self.current_visitor_credits < self.visitor_stop_threshold:
+            if self.last_credit_alert != 'stop':
+                self.send_telegram(f"🛑 CRITICAL: Only {self.current_visitor_credits} visitors left! Auto-bid stopped.")
+                self.last_credit_alert = 'stop'
+            return False
+            
+        elif self.current_visitor_credits < self.visitor_alert_threshold:
+            if self.last_credit_alert != 'alert':
+                self.send_telegram(f"⚠️ WARNING: Low visitors - {self.current_visitor_credits} left!")
+                self.last_credit_alert = 'alert'
+            return True
+            
+        self.last_credit_alert = None
+        return True
 
     def reset_daily_target_if_needed(self):
         today = datetime.now().date()
@@ -123,27 +197,33 @@ class UltimateSmartBidder:
             self.top_bidder_tracking['current_session_start'] = None
             self.top_bidder_tracking['is_currently_top'] = False
 
-    def send_top_bidder_progress(self):
-        target = self.top_bidder_tracking['daily_target_minutes']
-        current = self.top_bidder_tracking['current_minutes_today']
-        progress_percent = (current / target * 100) if target > 0 else 0
+    def update_performance_analytics(self, campaign_name, is_top_bidder, current_views):
+        """Track performance metrics for analytics"""
+        current_hour = datetime.now().hour
         
-        progress_bar = self.create_progress_bar(progress_percent, 10)
+        # Track hourly views
+        hour_key = f"{datetime.now().date()}_{current_hour}"
+        if hour_key not in self.performance_analytics['hourly_views']:
+            self.performance_analytics['hourly_views'][hour_key] = 0
         
-        progress_msg = f"""
-⏱️ TOP BIDDER PROGRESS
-{progress_bar} {progress_percent:.1f}%
-
-🎯 Daily Target: {target//60}h {target%60}m
-📊 Current: {current//60}h {current%60}m
-⏳ Remaining: {(target - current)//60}h {((target - current)%60):.0f}m
-        """
-        self.send_telegram(progress_msg)
-
-    def create_progress_bar(self, percentage, length=20):
-        filled = int(length * percentage / 100)
-        empty = length - filled
-        return '▰' * filled + '▱' * empty
+        # Update views tracking based on position
+        if campaign_name in self.campaigns:
+            campaign_data = self.campaigns[campaign_name]
+            if 'last_views_count' not in campaign_data:
+                campaign_data['last_views_count'] = current_views
+                return
+            
+            views_increase = current_views - campaign_data['last_views_count']
+            if views_increase > 0:
+                self.performance_analytics['hourly_views'][hour_key] += views_increase
+                self.performance_analytics['today_views'] += views_increase
+                
+                if is_top_bidder:
+                    self.performance_analytics['views_when_top'].append(views_increase)
+                else:
+                    self.performance_analytics['views_when_not_top'].append(views_increase)
+            
+            campaign_data['last_views_count'] = current_views
 
     def calculate_smart_frequency(self):
         target = self.top_bidder_tracking['daily_target_minutes']
@@ -282,10 +362,6 @@ class UltimateSmartBidder:
             self.send_analytics_report()
         elif command_lower == '/progress':
             self.send_top_bidder_progress()
-        elif command_lower == '/views':
-            self.send_views_dashboard()
-        elif command_lower == '/health':
-            self.send_health_report()
         elif command_lower == '/help':
             self.send_help()
         else:
@@ -340,6 +416,10 @@ class UltimateSmartBidder:
         if not self.campaigns:
             self.send_telegram("📊 No campaigns loaded. Send /start")
             return
+        
+        # Get fresh credit balances
+        traffic_credits = self.get_traffic_credits()
+        visitor_credits = self.get_visitor_credits()
             
         campaigns_list = ""
         top_campaigns = 0
@@ -352,13 +432,12 @@ class UltimateSmartBidder:
             if is_top:
                 top_campaigns += 1
             
-            # Enhanced views info
+            # Add views info
             views_info = ""
             if 'views' in data:
                 views = data['views']
                 progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                progress_bar = self.create_progress_bar(progress_pct, 8)
-                views_info = f"\n   📊 {views['current']:,}/{views['total']:,} {progress_bar} {progress_pct:.1f}%"
+                views_info = f"\n   📊 {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)"
             
             campaigns_list += f"{position} {name}: {data['my_bid']} credits (Auto: {status}){views_info}\n"
 
@@ -369,109 +448,62 @@ class UltimateSmartBidder:
         status_msg = f"""
 📊 SMART STATUS
 
+💰 CREDITS BALANCE
+Traffic Credits: {traffic_credits}
+Available Visitors: {visitor_credits}
+
 ⏱️ TOP BIDDER: {current//60}h {current%60}m / {target//60}h {target%60}m ({progress_percent:.1f}%)
 🎯 MODE: {self.frequency_modes['current_mode']}
 🏆 POSITION: {top_campaigns}/{total_campaigns} at #1
 
 {campaigns_list}
 🤖 Auto Bids: {self.stats['auto_bids_made']}
-💎 Credits Saved: {self.stats['credits_saved']}
-        """
+"""
         self.send_telegram(status_msg)
 
-    def send_views_dashboard(self):
-        if not self.campaigns:
-            self.send_telegram("📊 No campaigns loaded. Send /start")
-            return
-        
-        dashboard = "📈 VIEWS DASHBOARD\n\n"
-        
-        for name, data in self.campaigns.items():
-            if 'views' not in data:
-                continue
-                
-            views = data['views']
-            progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-            progress_bar = self.create_progress_bar(progress_pct, 12)
-            
-            # Calculate completion time
-            views_left = views['total'] - views['current']
-            views_per_hour = views.get('views_per_hour', 0)
-            hours_left = views_left / views_per_hour if views_per_hour > 0 else 0
-            
-            dashboard += f"""🎯 {name}
-━━━━━━━━━━━━━━━━━━━━
-👁️  Views: {views['current']:,} / {views['total']:,}
-📊 Progress: {progress_bar} {progress_pct:.1f}%
-📈 Hits: {views['hits']:,} (CTR: {views.get('ctr', 0):.1f}x)
-⏰ Rate: {views.get('views_per_hour', 0):.0f}/hour
-🎯 Completion: {hours_left:.1f} days
-💰 Efficiency: {views.get('efficiency', 0):.1f}/10
-
-"""
-        
-        self.send_telegram(dashboard)
-
-    def send_health_report(self):
-        if not self.campaigns:
-            self.send_telegram("📊 No campaigns loaded. Send /start")
-            return
-        
-        health_report = "❤️ CAMPAIGN HEALTH REPORT\n\n"
-        
-        for name, data in self.campaigns.items():
-            if 'views' not in data:
-                continue
-                
-            views = data['views']
-            is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
-            auto_status = "✅ ON" if data.get('auto_bid', False) else "❌ OFF"
-            
-            health_score = random.randint(70, 95)  # Simulated health score
-            
-            health_report += f"""🔍 {name}
-━━━━━━━━━━━━━━━━━━━━
-❤️ Health: {health_score}/100
-🏆 Position: {'#1 🎯' if is_top else '#2+ 📉'}
-🤖 Auto-bid: {auto_status}
-📊 Progress: {views['current']:,}/{views['total']:,}
-📈 Performance: {views.get('views_per_hour', 0):.0f}/hour
-💰 Value: {views.get('efficiency', 0):.1f} views/credit
-
-"""
-        
-        self.send_telegram(health_report)
-
     def send_analytics_report(self):
-        if not self.views_analytics['peak_hours']:
-            # Generate some sample analytics
-            self.views_analytics['peak_hours'] = [14, 15, 16, 11, 12]
+        # Calculate performance metrics
+        bid_success_rate = 0
+        if self.performance_analytics['bid_attempts'] > 0:
+            bid_success_rate = (self.performance_analytics['bid_successes'] / self.performance_analytics['bid_attempts']) * 100
         
-        peak_hours_str = ", ".join([f"{h}:00" for h in self.views_analytics['peak_hours'][:4]])
+        # Calculate average view rates
+        views_when_top = 0
+        if self.performance_analytics['views_when_top']:
+            views_when_top = sum(self.performance_analytics['views_when_top']) / len(self.performance_analytics['views_when_top'])
         
-        # Calculate total views across campaigns
-        total_views_today = 0
-        for campaign in self.campaigns.values():
-            if 'views' in campaign:
-                total_views_today += campaign['views'].get('today_views', 0)
+        views_when_not_top = 0
+        if self.performance_analytics['views_when_not_top']:
+            views_when_not_top = sum(self.performance_analytics['views_when_not_top']) / len(self.performance_analytics['views_when_not_top'])
         
         analytics_msg = f"""
 📈 SMART ANALYTICS
 
-🕐 PEAK HOURS: {peak_hours_str}
-📊 TODAY'S VIEWS: {total_views_today:,}
-⚡ STRATEGY: Aggressive during peak hours
-💤 STRATEGY: Conservative during off-hours
+🕐 PEAK HOURS (IST): 2PM, 3PM, 4PM, 11AM
+📊 TODAY'S VIEWS: {self.performance_analytics['today_views']}
+📈 VIEW RATES:
+   • When #1: {views_when_top:.1f}/hour
+   • When #2+: {views_when_not_top:.1f}/hour
+🎯 BID SUCCESS: {bid_success_rate:.1f}%
 
-📊 TOP BIDDER TODAY:
-• Target: {self.top_bidder_tracking['daily_target_minutes']//60}h
-• Current: {self.top_bidder_tracking['current_minutes_today']//60}h
-• Progress: {(self.top_bidder_tracking['current_minutes_today']/self.top_bidder_tracking['daily_target_minutes']*100):.1f}%
-
-🎯 BIDDING: Always +1/+2 (minimal)
-⏰ HOLDS: Random 1-7 minutes
-        """
+💰 CREDITS
+Traffic Credits: {self.current_traffic_credits}
+Available Visitors: {self.current_visitor_credits}
+"""
         self.send_telegram(analytics_msg)
+
+    def send_top_bidder_progress(self):
+        target = self.top_bidder_tracking['daily_target_minutes']
+        current = self.top_bidder_tracking['current_minutes_today']
+        progress_percent = (current / target * 100) if target > 0 else 0
+        
+        progress_msg = f"""
+⏱️ TOP BIDDER PROGRESS
+🎯 Daily Target: {target//60}h {target%60}m
+📊 Current: {current//60}h {current%60}m ({progress_percent:.1f}%)
+⏳ Remaining: {(target - current)//60}h {((target - current)%60):.0f}m
+"""
+        self.send_telegram(progress_msg)
 
     def send_campaigns_list(self):
         if not self.campaigns:
@@ -500,24 +532,21 @@ class UltimateSmartBidder:
 
 /start - Start smart monitoring
 /stop - Stop monitoring  
-/status - Smart status with analytics
+/status - Credits, bids & progress
 /campaigns - List campaigns
-/analytics - Detailed analytics report
+/analytics - Performance analytics
 /progress - Top bidder progress
-/views - Views dashboard
-/health - Campaign health report
 
 /auto "My Advert" on - Enable auto-bid
 /auto all on - Enable all
 
 💡 FEATURES:
-• Tracks exact top bidder time
-• Daily 8-10h random target
-• Smart frequency adjustment
-• Detailed views monitoring
-• Progress tracking & analytics
-• Minimal bidding (+1/+2 only)
-        """
+• Smart credit monitoring & safety
+• Peak hour optimization (IST)
+• Performance analytics
+• Minimal +1/+2 bidding
+• Auto top bidder tracking
+"""
         self.send_telegram(help_msg)
 
     def parse_campaigns(self, html_content):
@@ -525,11 +554,11 @@ class UltimateSmartBidder:
             soup = BeautifulSoup(html_content, 'html.parser')
             new_campaigns = {}
             
-            # FIXED: Exact selector from your HTML
+            # Exact selector from HTML
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
             
             for div in campaign_divs:
-                # FIXED: Extract clean campaign name
+                # Extract clean campaign name
                 campaign_name = ""
                 for element in div.contents:
                     if isinstance(element, str) and element.strip():
@@ -548,11 +577,11 @@ class UltimateSmartBidder:
                 
                 text_content = div.get_text()
                 
-                # FIXED: Extract bid from "Campaign Bid: 151"
+                # Extract bid from "Campaign Bid: 151"
                 bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                 my_bid = int(bid_match.group(1)) if bid_match else 0
                 
-                # ENHANCED: Extract views and hits
+                # Extract views and hits
                 views_match = re.search(r'(\d+)\s*/\s*(\d+)\s*visitors', text_content)
                 hits_match = re.search(r'(\d+)\s*hits', text_content)
                 
@@ -566,25 +595,17 @@ class UltimateSmartBidder:
                     if campaign_name in self.campaigns:
                         auto_bid = self.campaigns[campaign_name].get('auto_bid', False)
                     
-                    # Enhanced views data
-                    ctr = total_hits / current_views if current_views > 0 else 0
-                    views_per_hour = random.randint(40, 80)  # Simulated for now
-                    efficiency = (current_views / my_bid) if my_bid > 0 else 0
-                    
                     new_campaigns[campaign_name] = {
                         'my_bid': my_bid,
                         'top_bid': my_bid,  # Will be updated from bid page
                         'auto_bid': auto_bid,
                         'last_bid_time': None,
                         'last_checked': None,
+                        'last_views_count': current_views,
                         'views': {
                             'current': current_views,
                             'total': total_views,
-                            'hits': total_hits,
-                            'ctr': ctr,
-                            'views_per_hour': views_per_hour,
-                            'efficiency': efficiency,
-                            'today_views': random.randint(200, 300)
+                            'hits': total_hits
                         }
                     }
             
@@ -612,7 +633,7 @@ class UltimateSmartBidder:
                     response = self.session.get(bid_url, timeout=30)
                     self.human_delay(1, 2)
                     
-                    # FIXED: Extract top bid from bid page HTML
+                    # Extract top bid from bid page HTML
                     soup = BeautifulSoup(response.content, 'html.parser')
                     top_bid_text = soup.get_text()
                     top_bid_match = re.search(r'top bid is (\d+) credits', top_bid_text)
@@ -630,6 +651,11 @@ class UltimateSmartBidder:
         self.stats['checks_made'] += 1
         
         if not self.smart_login():
+            return
+        
+        # Check credit safety before proceeding
+        if not self.check_credit_safety():
+            logger.warning("⛔ Credit safety check failed - skipping bids")
             return
         
         try:
@@ -666,6 +692,9 @@ class UltimateSmartBidder:
                     is_top_bidder = campaign_data['my_bid'] >= top_bid
                     self.update_top_bidder_tracking(campaign_name, is_top_bidder)
                     
+                    # Update performance analytics
+                    self.update_performance_analytics(campaign_name, is_top_bidder, campaign_data['views']['current'])
+                    
                     logger.info(f"📊 {campaign_name}: Your {campaign_data['my_bid']}, Top {top_bid}, Top: {is_top_bidder}")
                     
                     # Smart auto-bid logic
@@ -679,6 +708,9 @@ class UltimateSmartBidder:
 
     def execute_smart_auto_bid(self, campaign_name, campaign_data, current_top_bid):
         try:
+            # Track bid attempt
+            self.performance_analytics['bid_attempts'] += 1
+            
             # Only bid if we're not top bidder
             if campaign_data['my_bid'] >= current_top_bid:
                 return
@@ -723,13 +755,16 @@ class UltimateSmartBidder:
             if not action.startswith('http'):
                 action = f"https://adsha.re{action}"
             
-            # FIXED: Correct form data from your HTML
+            # Correct form data
             bid_data = {'bid': str(new_bid), 'vis': '0'}
             self.human_delay(2, 4)
             
             response = self.session.post(action, data=bid_data, allow_redirects=True)
             
             if response.status_code == 200:
+                # Track successful bid
+                self.performance_analytics['bid_successes'] += 1
+                
                 # Success - update campaign data
                 campaign_data['my_bid'] = new_bid
                 campaign_data['last_bid_time'] = datetime.now()
@@ -746,7 +781,7 @@ class UltimateSmartBidder:
 🎯 Bid: {old_bid} → {new_bid} credits
 📈 Increase: +{new_bid - old_bid} credits
 🏆 Position: #1 Achieved!
-                """
+"""
                 self.send_telegram(success_msg)
                 
         except Exception as e:
