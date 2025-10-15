@@ -47,9 +47,9 @@ class UltimateSmartBidder:
             'current_mode': 'conservative'
         }
         
-        # Target settings
+        # Target settings - REDUCED to 6-8 hours
         self.top_bidder_tracking = {
-            'daily_target_minutes': random.randint(480, 600),  # 8-10 hours
+            'daily_target_minutes': random.randint(360, 480),  # 6-8 hours
             'current_minutes_today': 0,
             'last_reset_date': datetime.now().date(),
             'current_session_start': None,
@@ -76,15 +76,15 @@ class UltimateSmartBidder:
         self.current_visitor_credits = 0
         self.last_credit_alert = None
         
-        # Performance analytics
+        # Performance analytics - ONLY TRACK WHEN #1
         self.performance_analytics = {
             'bid_attempts': 0,
             'bid_successes': 0,
-            'views_when_top': [],
-            'views_when_not_top': [],
-            'hourly_views': {},
-            'peak_hours': [14, 15, 16, 11],  # 2PM, 3PM, 4PM, 11AM IST
-            'today_views': 0
+            'views_when_top': [],      # ONLY when position is #1
+            'views_when_not_top': [],  # When position is #2+
+            'hourly_views_top': {},    # ONLY track views when #1 position
+            'today_views': 0,
+            'peak_hours': []           # Will be calculated from real data
         }
         
         # Statistics
@@ -130,47 +130,48 @@ class UltimateSmartBidder:
             return 0
 
     def get_visitor_credits(self):
-        """Get available visitors from adverts page"""
+        """Get available visitors from adverts page - FIXED COMMA PARSING"""
         try:
             response = self.session.get("https://adsha.re/adverts", timeout=30)
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Find "Visitors: 992" text
-            visitors_match = re.search(r'Visitors:\s*(\d+)', soup.get_text())
+            # FIXED: Handle commas in numbers like "1,504"
+            visitors_match = re.search(r'Visitors:\s*([\d,]+)', soup.get_text())
             if visitors_match:
-                return int(visitors_match.group(1))
+                visitors_str = visitors_match.group(1).replace(',', '')  # Remove commas
+                return int(visitors_str)
             return 0
         except Exception as e:
             logger.error(f"Error getting visitor credits: {e}")
             return 0
 
     def check_credit_safety(self):
-        """Check if credits are sufficient for bidding"""
+        """Check if credits are sufficient for bidding - SEPARATE FROM CAMPAIGN LOADING"""
         # Update credit balances
         self.current_traffic_credits = self.get_traffic_credits()
         self.current_visitor_credits = self.get_visitor_credits()
         
-        # Check visitor credits for alerts
+        # Check visitor credits for alerts - ONLY AFFECTS BIDDING, NOT CAMPAIGN LOADING
         if self.current_visitor_credits < self.visitor_stop_threshold:
             if self.last_credit_alert != 'stop':
                 self.send_telegram(f"🛑 CRITICAL: Only {self.current_visitor_credits} visitors left! Auto-bid stopped.")
                 self.last_credit_alert = 'stop'
-            return False
+            return False  # Stop BIDDING only
             
         elif self.current_visitor_credits < self.visitor_alert_threshold:
             if self.last_credit_alert != 'alert':
                 self.send_telegram(f"⚠️ WARNING: Low visitors - {self.current_visitor_credits} left!")
                 self.last_credit_alert = 'alert'
-            return True
+            return True  # Allow bidding with warning
             
         self.last_credit_alert = None
-        return True
+        return True  # Allow bidding
 
     def reset_daily_target_if_needed(self):
         today = datetime.now().date()
         if today != self.top_bidder_tracking['last_reset_date']:
             self.top_bidder_tracking = {
-                'daily_target_minutes': random.randint(480, 600),
+                'daily_target_minutes': random.randint(360, 480),  # 6-8 hours
                 'current_minutes_today': 0,
                 'last_reset_date': today,
                 'current_session_start': None,
@@ -198,15 +199,11 @@ class UltimateSmartBidder:
             self.top_bidder_tracking['is_currently_top'] = False
 
     def update_performance_analytics(self, campaign_name, is_top_bidder, current_views):
-        """Track performance metrics for analytics"""
+        """Track performance metrics - ONLY WHEN #1 POSITION FOR PEAK HOURS"""
         current_hour = datetime.now().hour
+        current_date = datetime.now().date()
+        hour_key = f"{current_date}_{current_hour}"
         
-        # Track hourly views
-        hour_key = f"{datetime.now().date()}_{current_hour}"
-        if hour_key not in self.performance_analytics['hourly_views']:
-            self.performance_analytics['hourly_views'][hour_key] = 0
-        
-        # Update views tracking based on position
         if campaign_name in self.campaigns:
             campaign_data = self.campaigns[campaign_name]
             if 'last_views_count' not in campaign_data:
@@ -215,27 +212,74 @@ class UltimateSmartBidder:
             
             views_increase = current_views - campaign_data['last_views_count']
             if views_increase > 0:
-                self.performance_analytics['hourly_views'][hour_key] += views_increase
                 self.performance_analytics['today_views'] += views_increase
                 
+                # Track views by position for performance comparison
                 if is_top_bidder:
                     self.performance_analytics['views_when_top'].append(views_increase)
+                    logger.info(f"📈 #1 POSITION: +{views_increase} views at {current_hour}:00")
+                    
+                    # CRITICAL: Only track for peak hours calculation when #1 position
+                    if hour_key not in self.performance_analytics['hourly_views_top']:
+                        self.performance_analytics['hourly_views_top'][hour_key] = 0
+                    self.performance_analytics['hourly_views_top'][hour_key] += views_increase
+                    
                 else:
                     self.performance_analytics['views_when_not_top'].append(views_increase)
+                    logger.info(f"📉 #2+ POSITION: +{views_increase} views at {current_hour}:00")
             
             campaign_data['last_views_count'] = current_views
 
+    def calculate_real_peak_hours(self):
+        """Calculate REAL peak hours from ACTUAL data - ONLY WHEN #1 POSITION"""
+        if len(self.performance_analytics['hourly_views_top']) < 6:  # Need minimum 6 hours of #1 data
+            return []  # Return empty until we have enough #1 position data
+        
+        hourly_avg_views = {}
+        
+        # Calculate average views per hour - ONLY FROM #1 POSITION DATA
+        for hour in range(24):  # 0-23 hours
+            hour_views = []
+            for hour_key, views in self.performance_analytics['hourly_views_top'].items():
+                hour_num = int(hour_key.split('_')[1])
+                if hour_num == hour:
+                    hour_views.append(views)
+            
+            if hour_views:
+                hourly_avg_views[hour] = sum(hour_views) / len(hour_views)
+        
+        if not hourly_avg_views:
+            return []
+        
+        # Get top 4 hours with highest average views WHEN #1
+        sorted_hours = sorted(hourly_avg_views.items(), key=lambda x: x[1], reverse=True)
+        peak_hours = [hour for hour, avg in sorted_hours[:4]]
+        
+        logger.info(f"🎯 CALCULATED PEAK HOURS: {peak_hours} (from {len(self.performance_analytics['hourly_views_top'])} hours of #1 data)")
+        return peak_hours
+
     def calculate_smart_frequency(self):
+        """Smart frequency with REAL peak hour priority"""
+        # Calculate REAL peak hours from ACTUAL #1 position data
+        real_peak_hours = self.calculate_real_peak_hours()
+        current_hour = datetime.now().hour
+        
+        # PRIORITY: Aggressive during REAL peak hours (when you perform best as #1)
+        if real_peak_hours and current_hour in real_peak_hours:
+            self.frequency_modes['current_mode'] = 'aggressive'
+            logger.info(f"⚡ REAL PEAK HOUR {current_hour}:00 - Aggressive mode")
+            return random.randint(120, 180)  # 2-3 minutes during peaks
+        
+        # Normal logic for off-peak hours
         target = self.top_bidder_tracking['daily_target_minutes']
         current = self.top_bidder_tracking['current_minutes_today']
         
         if current < target * 0.7:
             self.frequency_modes['current_mode'] = 'aggressive'
+            return random.randint(120, 180)  # 2-3 minutes
         else:
             self.frequency_modes['current_mode'] = 'conservative'
-            
-        mode = self.frequency_modes['current_mode']
-        return random.randint(self.frequency_modes[mode]['min'], self.frequency_modes[mode]['max'])
+            return random.randint(900, 1200)  # 15-20 minutes
 
     def calculate_minimal_bid(self, current_top_bid):
         return current_top_bid + random.choice(self.minimal_bid_weights)
@@ -450,7 +494,7 @@ class UltimateSmartBidder:
 
 💰 CREDITS BALANCE
 Traffic Credits: {traffic_credits}
-Available Visitors: {visitor_credits}
+Available Visitors: {visitor_credits:,}
 
 ⏱️ TOP BIDDER: {current//60}h {current%60}m / {target//60}h {target%60}m ({progress_percent:.1f}%)
 🎯 MODE: {self.frequency_modes['current_mode']}
@@ -462,12 +506,11 @@ Available Visitors: {visitor_credits}
         self.send_telegram(status_msg)
 
     def send_analytics_report(self):
-        # Calculate performance metrics
-        bid_success_rate = 0
-        if self.performance_analytics['bid_attempts'] > 0:
-            bid_success_rate = (self.performance_analytics['bid_successes'] / self.performance_analytics['bid_attempts']) * 100
+        # Calculate REAL performance metrics from ACTUAL data
+        real_peak_hours = self.calculate_real_peak_hours()
+        peak_hours_str = ", ".join([f"{h}:00" for h in real_peak_hours]) if real_peak_hours else "Collecting #1 position data..."
         
-        # Calculate average view rates
+        # Calculate REAL view rates from ACTUAL data
         views_when_top = 0
         if self.performance_analytics['views_when_top']:
             views_when_top = sum(self.performance_analytics['views_when_top']) / len(self.performance_analytics['views_when_top'])
@@ -476,19 +519,26 @@ Available Visitors: {visitor_credits}
         if self.performance_analytics['views_when_not_top']:
             views_when_not_top = sum(self.performance_analytics['views_when_not_top']) / len(self.performance_analytics['views_when_not_top'])
         
+        # Calculate REAL bid success rate
+        bid_success_rate = 0
+        if self.performance_analytics['bid_attempts'] > 0:
+            bid_success_rate = (self.performance_analytics['bid_successes'] / self.performance_analytics['bid_attempts']) * 100
+        
+        # Calculate performance boost
+        performance_boost = 0
+        if views_when_not_top > 0:
+            performance_boost = ((views_when_top - views_when_not_top) / views_when_not_top) * 100
+
         analytics_msg = f"""
-📈 SMART ANALYTICS
+📈 SMART ANALYTICS - REAL DATA
 
-🕐 PEAK HOURS (IST): 2PM, 3PM, 4PM, 11AM
-📊 TODAY'S VIEWS: {self.performance_analytics['today_views']}
-📈 VIEW RATES:
-   • When #1: {views_when_top:.1f}/hour
-   • When #2+: {views_when_not_top:.1f}/hour
+🕐 PEAK HOURS: {peak_hours_str}
+📊 DATA SOURCE: {len(self.performance_analytics['hourly_views_top'])} hours of #1 data
+📈 PERFORMANCE WHEN #1:
+   • Views: {views_when_top:.1f}/hour 🚀
+   • Boost: +{performance_boost:.1f}% vs #2+ ✅
 🎯 BID SUCCESS: {bid_success_rate:.1f}%
-
-💰 CREDITS
-Traffic Credits: {self.current_traffic_credits}
-Available Visitors: {self.current_visitor_credits}
+📊 TODAY'S VIEWS: {self.performance_analytics['today_views']:,}
 """
         self.send_telegram(analytics_msg)
 
@@ -534,18 +584,18 @@ Available Visitors: {self.current_visitor_credits}
 /stop - Stop monitoring  
 /status - Credits, bids & progress
 /campaigns - List campaigns
-/analytics - Performance analytics
+/analytics - Real performance analytics
 /progress - Top bidder progress
 
 /auto "My Advert" on - Enable auto-bid
 /auto all on - Enable all
 
-💡 FEATURES:
-• Smart credit monitoring & safety
-• Peak hour optimization (IST)
-• Performance analytics
-• Minimal +1/+2 bidding
-• Auto top bidder tracking
+💡 REAL FEATURES:
+• Real peak hour detection (from #1 position data)
+• Performance analytics (actual view rates)
+• Credit safety with comma parsing fix
+• 6-8 hour daily target focus
+• Smart bidding with peak priority
 """
         self.send_telegram(help_msg)
 
@@ -653,12 +703,8 @@ Available Visitors: {self.current_visitor_credits}
         if not self.smart_login():
             return
         
-        # Check credit safety before proceeding
-        if not self.check_credit_safety():
-            logger.warning("⛔ Credit safety check failed - skipping bids")
-            return
-        
         try:
+            # FIXED: ALWAYS LOAD CAMPAIGNS FIRST (regardless of credits)
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay(1, 2)
@@ -678,6 +724,9 @@ Available Visitors: {self.current_visitor_credits}
             if not self.campaigns:
                 return
             
+            # FIXED: Check credits SEPARATELY - only affects bidding, not campaign operations
+            credit_safe = self.check_credit_safety()
+            
             # Check each campaign
             for campaign_name, campaign_data in self.campaigns.items():
                 top_bid = self.get_top_bid_from_bid_page(campaign_name)
@@ -692,13 +741,13 @@ Available Visitors: {self.current_visitor_credits}
                     is_top_bidder = campaign_data['my_bid'] >= top_bid
                     self.update_top_bidder_tracking(campaign_name, is_top_bidder)
                     
-                    # Update performance analytics
+                    # Update performance analytics - CRITICAL FOR PEAK HOUR CALCULATION
                     self.update_performance_analytics(campaign_name, is_top_bidder, campaign_data['views']['current'])
                     
                     logger.info(f"📊 {campaign_name}: Your {campaign_data['my_bid']}, Top {top_bid}, Top: {is_top_bidder}")
                     
-                    # Smart auto-bid logic
-                    if (campaign_data['auto_bid'] and 
+                    # Smart auto-bid logic - ONLY AFFECTED BY CREDIT SAFETY
+                    if (credit_safe and campaign_data['auto_bid'] and 
                         not self.should_skip_bid_with_random_hold(campaign_name)):
                         
                         self.execute_smart_auto_bid(campaign_name, campaign_data, top_bid)
@@ -816,7 +865,8 @@ Available Visitors: {self.current_visitor_credits}
                         self.check_all_campaigns()
                         last_campaign_check = current_time
                         
-                        logger.info(f"🔄 Check complete. Next in {check_interval//60}min")
+                        mode = self.frequency_modes['current_mode']
+                        logger.info(f"🔄 Check complete. Next in {check_interval//60}min ({mode} mode)")
                 
                 time.sleep(1)
                 
