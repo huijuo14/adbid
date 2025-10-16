@@ -13,7 +13,7 @@ import socket
 import sys
 
 # Instance locking
-def check_port_in_use(port=10001):
+def check_port_in_use(port=10002):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('0.0.0.0', port))
@@ -227,23 +227,154 @@ class UltimateSmartBidder:
         self.last_credit_alert = None
         return True
 
-    def send_telegram(self, message, parse_mode='HTML'):
+    def send_telegram(self, message, parse_mode='HTML', reply_markup=None):
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            data = {"chat_id": self.chat_id, "text": message, "parse_mode": parse_mode}
-            response = self.session.post(url, data=data, timeout=30)
+            data = {
+                "chat_id": self.chat_id, 
+                "text": message, 
+                "parse_mode": parse_mode
+            }
+            if reply_markup:
+                data["reply_markup"] = reply_markup
+                
+            response = self.session.post(url, json=data, timeout=30)
             return response.status_code == 200
         except:
             return False
+
+    def send_main_menu(self):
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📊 Status", "callback_data": "status"}],
+                [{"text": "📋 Campaigns", "callback_data": "campaigns"}],
+                [{"text": "💰 Credits", "callback_data": "credits"}],
+                [{"text": "🎯 Auto Bid", "callback_data": "auto_bid"}],
+                [{"text": "🕵️ Competitors", "callback_data": "competitors"}],
+                [{"text": "🛑 Stop", "callback_data": "stop"}]
+            ]
+        }
+        
+        traffic_credits = self.get_traffic_credits()
+        visitor_credits = self.get_visitor_credits()
+        
+        message = f"""
+🤖 ULTIMATE SMART BIDDER
+
+💰 Credits: Traffic {traffic_credits} | Visitors {visitor_credits:,}
+📊 Active Campaigns: {len(self.campaigns)}
+
+Tap buttons below to control your bot:
+"""
+        self.send_telegram(message, reply_markup=keyboard)
+
+    def send_campaigns_menu(self):
+        if not self.campaigns:
+            self.send_telegram("📊 No campaigns loaded. Send /start")
+            return
+        
+        campaigns_text = "📋 YOUR CAMPAIGNS\n\n"
+        keyboard_buttons = []
+        
+        for name, data in self.campaigns.items():
+            auto_status = "✅ ON" if data.get('auto_bid', False) else "❌ OFF"
+            position = "🏆" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉"
+            
+            campaigns_text += f"{position} <b>{name}</b>\n"
+            campaigns_text += f"Bid: {data['my_bid']} credits | Auto: {auto_status}\n"
+            
+            if 'views' in data:
+                views = data['views']
+                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
+                campaigns_text += f"Views: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)\n"
+            
+            campaigns_text += "\n"
+            
+            # Add toggle buttons for this campaign
+            keyboard_buttons.append([
+                {"text": f"✅ {name} ON", "callback_data": f"auto_on_{name}"},
+                {"text": f"❌ {name} OFF", "callback_data": f"auto_off_{name}"}
+            ])
+        
+        # Add back button
+        keyboard_buttons.append([{"text": "📊 Back to Main", "callback_data": "main_menu"}])
+        
+        keyboard = {"inline_keyboard": keyboard_buttons}
+        self.send_telegram(campaigns_text, reply_markup=keyboard)
+
+    def send_auto_bid_menu(self):
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "✅ ALL ON", "callback_data": "auto_all_on"}],
+                [{"text": "❌ ALL OFF", "callback_data": "auto_all_off"}],
+                [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
+            ]
+        }
+        
+        message = "🎯 AUTO-BID CONTROL\n\nToggle auto-bid for all campaigns:"
+        self.send_telegram(message, reply_markup=keyboard)
+
+    def send_competitors_menu(self):
+        if not self.competitor_activity:
+            message = "🕵️ No competitor data collected yet. Check back later."
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
+                ]
+            }
+            self.send_telegram(message, reply_markup=keyboard)
+            return
+        
+        report = "🕵️ COMPETITOR ACTIVITY\n\n"
+        
+        for campaign, activity in self.competitor_activity.items():
+            report += f"<b>{campaign}</b>:\n"
+            
+            if activity.get('active_hours'):
+                active_hours = sorted(activity['active_hours'])[:3]
+                report += f"🕐 Active: {', '.join([f'{h}:00' for h in active_hours])}\n"
+            
+            if activity.get('last_bid_time'):
+                last_bid = activity['last_bid_time']
+                report += f"⏰ Last bid: {last_bid.strftime('%H:%M')}\n"
+            
+            report += "\n"
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔄 Refresh", "callback_data": "competitors"}],
+                [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
+            ]
+        }
+        
+        self.send_telegram(report, reply_markup=keyboard)
+
+    def send_credits_menu(self):
+        traffic_credits = self.get_traffic_credits()
+        visitor_credits = self.get_visitor_credits()
+        
+        message = f"""
+💰 CREDIT STATUS
+
+Traffic Credits: {traffic_credits}
+Visitor Credits: {visitor_credits:,}
+"""
+        
+        if traffic_credits >= 1000:
+            message += "\n💰 Convert 1000+ traffic credits to visitors!"
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
+            ]
+        }
+        
+        self.send_telegram(message, reply_markup=keyboard)
 
     def send_hourly_status(self):
         """Send automatic hourly status"""
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
-        
-        active_campaigns = len(self.campaigns)
-        top_campaigns = sum(1 for data in self.campaigns.values() 
-                           if data.get('my_bid', 0) >= data.get('top_bid', 0))
         
         status_msg = f"""
 🕐 HOURLY STATUS REPORT
@@ -253,10 +384,16 @@ Traffic: {traffic_credits}
 Visitors: {visitor_credits:,}
 
 📊 CAMPAIGNS:
-{top_campaigns}/{active_campaigns} at #1 position
-
-🤖 Bot is actively monitoring...
 """
+        
+        for name, data in self.campaigns.items():
+            if 'views' in data:
+                views = data['views']
+                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
+                status_msg += f"\"{name}\" - {views['current']:,}/{views['total']:,} views ({progress_pct:.1f}%)\n"
+        
+        status_msg += "\n🤖 Bot is actively monitoring..."
+        
         self.send_telegram(status_msg)
         logger.info("📊 Sent hourly status report")
 
@@ -275,6 +412,11 @@ Visitors: {visitor_credits:,}
                     if update_id > self.last_update_id:
                         self.last_update_id = update_id
                         
+                        # Handle callback queries (button clicks)
+                        if 'callback_query' in update:
+                            self.handle_callback_query(update['callback_query'])
+                            continue
+                            
                         if 'message' in update and 'text' in update['message']:
                             text = update['message']['text']
                             chat_id = update['message']['chat']['id']
@@ -287,6 +429,54 @@ Visitors: {visitor_credits:,}
         except:
             pass
 
+    def handle_callback_query(self, callback_query):
+        data = callback_query['data']
+        message_id = callback_query['message']['message_id']
+        
+        if data == 'main_menu':
+            self.send_main_menu()
+        elif data == 'status':
+            self.send_smart_status()
+        elif data == 'campaigns':
+            self.send_campaigns_menu()
+        elif data == 'credits':
+            self.send_credits_menu()
+        elif data == 'auto_bid':
+            self.send_auto_bid_menu()
+        elif data == 'competitors':
+            self.send_competitors_menu()
+        elif data == 'stop':
+            self.stop_monitoring()
+        elif data == 'auto_all_on':
+            self.toggle_all_auto_bid(True)
+            self.send_auto_bid_menu()
+        elif data == 'auto_all_off':
+            self.toggle_all_auto_bid(False)
+            self.send_auto_bid_menu()
+        elif data.startswith('auto_on_'):
+            campaign_name = data[8:]  # Remove 'auto_on_'
+            self.toggle_auto_bid(campaign_name, True)
+            self.send_campaigns_menu()
+        elif data.startswith('auto_off_'):
+            campaign_name = data[9:]  # Remove 'auto_off_'
+            self.toggle_auto_bid(campaign_name, False)
+            self.send_campaigns_menu()
+
+    def toggle_auto_bid(self, campaign_name, enable):
+        if campaign_name in self.campaigns:
+            self.campaigns[campaign_name]['auto_bid'] = enable
+            status = "enabled" if enable else "disabled"
+            self.send_telegram(f"🔄 Auto-bid {status} for {campaign_name}")
+            self.save_bot_state()
+
+    def toggle_all_auto_bid(self, enable):
+        for campaign_name in self.campaigns:
+            self.campaigns[campaign_name]['auto_bid'] = enable
+        
+        status = "enabled" if enable else "disabled"
+        self.send_telegram(f"🔄 Auto-bid {status} for all campaigns")
+        self.save_bot_state()
+
     def handle_command(self, command, chat_id):
         command_lower = command.lower().strip()
         
@@ -298,14 +488,12 @@ Visitors: {visitor_credits:,}
             self.send_smart_status()
         elif command_lower.startswith('/auto'):
             self.handle_auto_command(command)
-        elif command_lower == '/campaigns':
-            self.send_campaigns_list()
-        elif command_lower == '/competitors':
-            self.send_competitor_report()
+        elif command_lower == '/menu':
+            self.send_main_menu()
         elif command_lower == '/help':
             self.send_help()
         else:
-            self.send_telegram("❌ Unknown command. Use /help")
+            self.send_telegram("❌ Unknown command. Use /help or /menu for buttons")
 
     def handle_auto_command(self, command):
         parts = command.split()
@@ -316,15 +504,11 @@ Visitors: {visitor_credits:,}
             
         if len(parts) == 2 and parts[1].lower() in ['on', 'off']:
             action = parts[1].lower()
-            for campaign_name in self.campaigns:
-                self.campaigns[campaign_name]['auto_bid'] = (action == 'on')
-            
-            status = "enabled" if action == 'on' else "disabled"
-            self.send_telegram(f"🔄 Auto-bid {status} for all campaigns")
+            self.toggle_all_auto_bid(action == 'on')
             return
             
         if len(parts) >= 3:
-            campaign_name = ' '.join(parts[1:-1])
+            campaign_name = ' '.join(parts[1:-1])  # No quotes needed
             action = parts[-1].lower()
             
             if action not in ['on', 'off']:
@@ -337,14 +521,13 @@ Visitors: {visitor_credits:,}
                     break
             
             if found_campaign:
-                self.campaigns[found_campaign]['auto_bid'] = (action == 'on')
-                status = "enabled" if action == 'on' else "disabled"
-                self.send_telegram(f"🔄 Auto-bid {status} for '{found_campaign}'")
+                self.toggle_auto_bid(found_campaign, action == 'on')
 
     def start_monitoring(self):
         self.is_monitoring = True
         logger.info("🚀 Smart monitoring started")
         self.send_telegram("🚀 Ultimate Smart Bidder Activated!")
+        self.send_main_menu()
 
     def stop_monitoring(self):
         self.is_monitoring = False
@@ -360,15 +543,11 @@ Visitors: {visitor_credits:,}
         visitor_credits = self.get_visitor_credits()
             
         campaigns_list = ""
-        top_campaigns = 0
-        total_campaigns = len(self.campaigns)
         
         for name, data in self.campaigns.items():
             is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
             status = "✅" if data.get('auto_bid', False) else "❌"
             position = "🏆 TOP" if is_top else "📉 #2+"
-            if is_top:
-                top_campaigns += 1
             
             views_info = ""
             if 'views' in data:
@@ -383,71 +562,21 @@ Visitors: {visitor_credits:,}
 
 💰 CREDITS: Traffic {traffic_credits} | Visitors {visitor_credits:,}
 
-🏆 POSITION: {top_campaigns}/{total_campaigns} at #1
-
 {campaigns_list}
 """
         self.send_telegram(status_msg)
-
-    def send_campaigns_list(self):
-        if not self.campaigns:
-            self.send_telegram("📊 No campaigns loaded. Send /start")
-            return
-            
-        campaigns_msg = "📊 Your Campaigns:\n\n"
-        for name, data in self.campaigns.items():
-            auto_status = "✅ ON" if data.get('auto_bid', False) else "❌ OFF"
-            position = "🏆" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉"
-            campaigns_msg += f"{position} <b>{name}</b>\n"
-            campaigns_msg += f"Bid: {data['my_bid']} credits | Auto: {auto_status}\n"
-            
-            if 'views' in data:
-                views = data['views']
-                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                campaigns_msg += f"Views: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)\n"
-            
-            campaigns_msg += f"<code>/auto \"{name}\" on</code>\n\n"
-        
-        self.send_telegram(campaigns_msg)
-
-    def send_competitor_report(self):
-        if not self.competitor_activity:
-            self.send_telegram("📊 No competitor data collected yet. Check back later.")
-            return
-        
-        report = "🕵️ COMPETITOR ACTIVITY REPORT\n\n"
-        
-        for campaign, activity in self.competitor_activity.items():
-            report += f"<b>{campaign}</b>:\n"
-            
-            if activity.get('active_hours'):
-                active_hours = sorted(activity['active_hours'])[:5]  # Top 5 active hours
-                report += f"   🕐 Active: {', '.join([f'{h}:00' for h in active_hours])}\n"
-            
-            if activity.get('sleep_hours'):
-                sleep_hours = sorted(activity['sleep_hours'])[:5]  # Top 5 sleep hours
-                report += f"   💤 Sleeps: {', '.join([f'{h}:00' for h in sleep_hours])}\n"
-            
-            if activity.get('last_bid_time'):
-                last_bid = activity['last_bid_time']
-                report += f"   ⏰ Last bid: {last_bid.strftime('%H:%M')}\n"
-            
-            report += "\n"
-        
-        self.send_telegram(report)
 
     def send_help(self):
         help_msg = """
 🤖 ULTIMATE SMART BIDDER
 
+/menu - Show button controls
 /start - Start monitoring
 /stop - Stop monitoring  
-/status - Credits & campaigns
-/campaigns - List campaigns
-/competitors - Competitor activity report
+/status - Detailed status
 /auto [campaign] on/off - Toggle auto-bid
 
-💡 SMART FEATURES:
+💡 FEATURES:
 • +1-2 credit bidding
 • Max bid protection (369)
 • Campaign completion alerts
@@ -455,6 +584,7 @@ Visitors: {visitor_credits:,}
 • Competitor activity tracking
 • Bid change alerts
 • Hourly status reports
+• Button controls
 """
         self.send_telegram(help_msg)
 
@@ -584,9 +714,6 @@ Visitors: {visitor_credits:,}
             
             # Track active hours (when bids change)
             activity['active_hours'].add(current_hour)
-            
-            # Track sleep hours (no bid changes for 4+ hours)
-            # This is calculated in the report based on gaps
         
         # Clean up old data (keep only last 7 days)
         activity['bid_changes'] = [change for change in activity['bid_changes'] 
@@ -766,6 +893,7 @@ Visitors: {visitor_credits:,}
             return
         
         self.send_telegram("🚀 Ultimate Smart Bidder Activated!")
+        self.send_main_menu()
         
         last_command_check = 0
         last_campaign_check = 0
@@ -824,4 +952,4 @@ if __name__ == "__main__":
     bot_thread.daemon = True
     bot_thread.start()
     
-    app.run(host='0.0.0.0', port=10001, debug=False)
+    app.run(host='0.0.0.0', port=10002, debug=False)
