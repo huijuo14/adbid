@@ -965,4 +965,4 @@ if __name__ == "__main__":
     bot_thread.daemon = True
     bot_thread.start()
     
-    app.run(host='0.0.0.0', port=10000, debug=False)
+    app.run(host='0.0.0.0', port=10001, debug=False)
