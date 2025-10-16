@@ -54,6 +54,7 @@ class UltimateSmartBidder:
         
         self.minimal_bid_weights = [1, 2]  # Only +1 or +2 credits
         self.check_interval = 300  # Fixed 5-minute checks
+        self.max_bid_limit = 369  # Your maximum bid limit
         
         self.visitor_alert_threshold = 1000
         self.visitor_stop_threshold = 500
@@ -61,11 +62,14 @@ class UltimateSmartBidder:
         self.current_visitor_credits = 0
         self.last_credit_alert = None
         
+        # Competitor tracking
+        self.competitor_activity = {}
+        self.bid_history = {}
+        
         # Alert tracking
         self.sent_alerts = {}
         
         self.load_bot_state()
-        self.get_render_ip()
 
     def save_bot_state(self):
         try:
@@ -74,7 +78,9 @@ class UltimateSmartBidder:
                 'last_update_id': self.last_update_id,
                 'session_valid': self.session_valid,
                 'is_monitoring': self.is_monitoring,
-                'sent_alerts': self.sent_alerts
+                'sent_alerts': self.sent_alerts,
+                'competitor_activity': self.competitor_activity,
+                'bid_history': self.bid_history
             }
             with open('bot_state.pkl', 'wb') as f:
                 pickle.dump(state_data, f)
@@ -91,6 +97,8 @@ class UltimateSmartBidder:
                     self.session_valid = state_data.get('session_valid', False)
                     self.is_monitoring = state_data.get('is_monitoring', False)
                     self.sent_alerts = state_data.get('sent_alerts', {})
+                    self.competitor_activity = state_data.get('competitor_activity', {})
+                    self.bid_history = state_data.get('bid_history', {})
                 logger.info("📂 Bot state loaded")
         except Exception as e:
             logger.error(f"Load state error: {e}")
@@ -98,15 +106,6 @@ class UltimateSmartBidder:
     def rotate_user_agent(self):
         user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
         self.session.headers.update({'User-Agent': random.choice(user_agents)})
-
-    def get_render_ip(self):
-        try:
-            response = requests.get('https://httpbin.org/ip', timeout=10)
-            ip_data = response.json()
-            self.analytics['render_ip'] = ip_data['origin']
-            logger.info(f"🌐 Render IP: {self.analytics['render_ip']}")
-        except Exception as e:
-            logger.error(f"IP check failed: {e}")
 
     def human_delay(self, min_seconds=2, max_seconds=5):
         delay = random.uniform(min_seconds, max_seconds)
@@ -277,6 +276,8 @@ class UltimateSmartBidder:
             self.handle_auto_command(command)
         elif command_lower == '/campaigns':
             self.send_campaigns_list()
+        elif command_lower == '/competitors':
+            self.send_competitor_report()
         elif command_lower == '/help':
             self.send_help()
         else:
@@ -385,6 +386,32 @@ class UltimateSmartBidder:
         
         self.send_telegram(campaigns_msg)
 
+    def send_competitor_report(self):
+        if not self.competitor_activity:
+            self.send_telegram("📊 No competitor data collected yet. Check back later.")
+            return
+        
+        report = "🕵️ COMPETITOR ACTIVITY REPORT\n\n"
+        
+        for campaign, activity in self.competitor_activity.items():
+            report += f"<b>{campaign}</b>:\n"
+            
+            if activity.get('active_hours'):
+                active_hours = sorted(activity['active_hours'])[:5]  # Top 5 active hours
+                report += f"   🕐 Active: {', '.join([f'{h}:00' for h in active_hours])}\n"
+            
+            if activity.get('sleep_hours'):
+                sleep_hours = sorted(activity['sleep_hours'])[:5]  # Top 5 sleep hours
+                report += f"   💤 Sleeps: {', '.join([f'{h}:00' for h in sleep_hours])}\n"
+            
+            if activity.get('last_bid_time'):
+                last_bid = activity['last_bid_time']
+                report += f"   ⏰ Last bid: {last_bid.strftime('%H:%M')}\n"
+            
+            report += "\n"
+        
+        self.send_telegram(report)
+
     def send_help(self):
         help_msg = """
 🤖 ULTIMATE SMART BIDDER
@@ -393,13 +420,16 @@ class UltimateSmartBidder:
 /stop - Stop monitoring  
 /status - Credits & campaigns
 /campaigns - List campaigns
+/competitors - Competitor activity report
 /auto [campaign] on/off - Toggle auto-bid
 
 💡 SMART FEATURES:
 • +1-2 credit bidding
+• Max bid protection (369)
 • Campaign completion alerts
-• Credit protection
 • Credit conversion reminders
+• Competitor activity tracking
+• Bid change alerts
 """
         self.send_telegram(help_msg)
 
@@ -491,7 +521,51 @@ class UltimateSmartBidder:
             return None
 
     def calculate_minimal_bid(self, current_top_bid):
-        return current_top_bid + random.choice(self.minimal_bid_weights)
+        new_bid = current_top_bid + random.choice(self.minimal_bid_weights)
+        
+        # Max bid protection
+        if new_bid > self.max_bid_limit:
+            self.send_telegram(f"🛑 MAX BID LIMIT: Would bid {new_bid} but max is {self.max_bid_limit}!")
+            return None  # Don't bid
+        
+        return new_bid
+
+    def track_competitor_activity(self, campaign_name, old_top_bid, new_top_bid, current_time):
+        if campaign_name not in self.competitor_activity:
+            self.competitor_activity[campaign_name] = {
+                'active_hours': set(),
+                'sleep_hours': set(),
+                'bid_changes': [],
+                'last_bid_time': None
+            }
+        
+        activity = self.competitor_activity[campaign_name]
+        current_hour = current_time.hour
+        
+        # Track bid changes
+        if old_top_bid != new_top_bid:
+            activity['bid_changes'].append({
+                'time': current_time,
+                'old_bid': old_top_bid,
+                'new_bid': new_top_bid,
+                'change': new_top_bid - old_top_bid
+            })
+            
+            # Keep only last 100 changes
+            activity['bid_changes'] = activity['bid_changes'][-100:]
+            
+            # Update last bid time
+            activity['last_bid_time'] = current_time
+            
+            # Track active hours (when bids change)
+            activity['active_hours'].add(current_hour)
+            
+            # Track sleep hours (no bid changes for 4+ hours)
+            # This is calculated in the report based on gaps
+        
+        # Clean up old data (keep only last 7 days)
+        activity['bid_changes'] = [change for change in activity['bid_changes'] 
+                                 if (current_time - change['time']).days < 7]
 
     def check_completion_alerts(self, campaign_name, campaign_data):
         if 'views' not in campaign_data:
@@ -538,6 +612,9 @@ class UltimateSmartBidder:
             old_bid = campaign_data['my_bid']
             new_bid = self.calculate_minimal_bid(current_top_bid)
             
+            if new_bid is None:  # Max bid limit reached
+                return
+                
             if new_bid <= old_bid:
                 return
             
@@ -623,6 +700,7 @@ class UltimateSmartBidder:
                 return
             
             credit_safe = self.check_credit_safety()
+            current_time = datetime.now()
             
             for campaign_name, campaign_data in self.campaigns.items():
                 top_bid = self.get_top_bid_from_bid_page(campaign_name)
@@ -630,15 +708,18 @@ class UltimateSmartBidder:
                 if top_bid:
                     old_top_bid = campaign_data.get('top_bid', 0)
                     campaign_data['top_bid'] = top_bid
-                    campaign_data['last_checked'] = datetime.now()
+                    campaign_data['last_checked'] = current_time
                     
-                        # Check for bid changes alert
-if old_top_bid > 0:
-    if top_bid < old_top_bid:
-        self.send_telegram(f"🔔 BID DECREASE:\n\"{campaign_name}\" - Top bid dropped from {old_top_bid} to {top_bid}!")
-    elif top_bid > old_top_bid:
-        self.send_telegram(f"📈 BID INCREASE:\n\"{campaign_name}\" - Top bid rose from {old_top_bid} to {top_bid}!")
-        
+                    # Track competitor activity
+                    self.track_competitor_activity(campaign_name, old_top_bid, top_bid, current_time)
+                    
+                    # Check for bid changes alert
+                    if old_top_bid > 0:
+                        if top_bid < old_top_bid:
+                            self.send_telegram(f"🔔 BID DECREASE:\n\"{campaign_name}\" - Top bid dropped from {old_top_bid} to {top_bid}!")
+                        elif top_bid > old_top_bid:
+                            self.send_telegram(f"📈 BID INCREASE:\n\"{campaign_name}\" - Top bid rose from {old_top_bid} to {top_bid}!")
+                    
                     # Check completion alerts
                     self.check_completion_alerts(campaign_name, campaign_data)
                     
@@ -699,10 +780,7 @@ def health():
 
 @app.route('/ip')
 def show_ip():
-    bot = getattr(app, 'bot_instance', None)
-    if bot:
-        return f"🌐 Render IP: {bot.analytics.get('render_ip', 'Unknown')}"
-    return "❌ Bot not initialized"
+    return "🌐 Bot IP Check"
 
 def run_bot():
     bot = UltimateSmartBidder()
