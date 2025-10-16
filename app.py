@@ -632,7 +632,7 @@ class UltimateSmartBidder:
                     campaign_data['top_bid'] = top_bid
                     campaign_data['last_checked'] = datetime.now()
                     
-                    # Check for bid changes alert
+                        # Check for bid changes alert
 if old_top_bid > 0:
     if top_bid < old_top_bid:
         self.send_telegram(f"🔔 BID DECREASE:\n\"{campaign_name}\" - Top bid dropped from {old_top_bid} to {top_bid}!")
