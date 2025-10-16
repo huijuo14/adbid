@@ -236,6 +236,30 @@ class UltimateSmartBidder:
         except:
             return False
 
+    def send_hourly_status(self):
+        """Send automatic hourly status"""
+        traffic_credits = self.get_traffic_credits()
+        visitor_credits = self.get_visitor_credits()
+        
+        active_campaigns = len(self.campaigns)
+        top_campaigns = sum(1 for data in self.campaigns.values() 
+                           if data.get('my_bid', 0) >= data.get('top_bid', 0))
+        
+        status_msg = f"""
+🕐 HOURLY STATUS REPORT
+
+💰 CREDITS:
+Traffic: {traffic_credits}
+Visitors: {visitor_credits:,}
+
+📊 CAMPAIGNS:
+{top_campaigns}/{active_campaigns} at #1 position
+
+🤖 Bot is actively monitoring...
+"""
+        self.send_telegram(status_msg)
+        logger.info("📊 Sent hourly status report")
+
     def process_telegram_command(self):
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
@@ -430,6 +454,7 @@ class UltimateSmartBidder:
 • Credit conversion reminders
 • Competitor activity tracking
 • Bid change alerts
+• Hourly status reports
 """
         self.send_telegram(help_msg)
 
@@ -745,6 +770,7 @@ class UltimateSmartBidder:
         last_command_check = 0
         last_campaign_check = 0
         last_save_time = time.time()
+        last_hourly_status = time.time()
         
         while True:
             try:
@@ -753,6 +779,12 @@ class UltimateSmartBidder:
                 if current_time - last_command_check >= 3:
                     self.process_telegram_command()
                     last_command_check = current_time
+                
+                # Hourly status report (every 60 minutes)
+                if current_time - last_hourly_status >= 3600:
+                    if self.is_monitoring:
+                        self.send_hourly_status()
+                    last_hourly_status = current_time
                 
                 if current_time - last_save_time >= 300:
                     self.save_bot_state()
