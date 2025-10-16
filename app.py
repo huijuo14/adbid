@@ -1,3 +1,28 @@
+import socket
+import time
+import sys
+
+def check_port_in_use(port=10000):
+    """Check if port is already in use - if yes, another instance is running"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('0.0.0.0', port))
+            return False
+    except OSError:
+        return True
+
+# Wait and check multiple times (in case of quick restarts)
+for i in range(5):
+    if check_port_in_use():
+        if i == 4:  # Last attempt
+            print("❌ Another bot instance is already running! Exiting...")
+            sys.exit(1)
+        time.sleep(2)
+    else:
+        break
+
+print("✅ Instance check passed - starting bot...")
+
 import requests
 from bs4 import BeautifulSoup
 import time
