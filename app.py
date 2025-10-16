@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 from flask import Flask
 import threading
 import json
+import pickle
+import os
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
 
@@ -17,41 +18,34 @@ app = Flask(__name__)
 
 class UltimateSmartBidder:
     def __init__(self):
-        # Credentials
         self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
         self.chat_id = "2052085789"
         self.last_update_id = 0
         self.email = "loginallapps@gmail.com"
         self.password = "@Sd2007123"
         
-        # Session
         self.session = requests.Session()
         self.rotate_user_agent()
         self.session_valid = False
         
-        # Bot state
         self.is_monitoring = False
         self.campaigns = {}
         
-        # Bidding strategy
         self.minimal_bid_weights = [1, 1, 1, 2, 2, 2, 2]
         self.random_hold_range = (60, 420)
         
-        # Frequency modes
         self.frequency_modes = {
             'aggressive': {'min': 120, 'max': 180},
             'conservative': {'min': 900, 'max': 1200},
             'current_mode': 'conservative'
         }
         
-        # Credit safety
         self.visitor_alert_threshold = 1000
         self.visitor_stop_threshold = 500
         self.current_traffic_credits = 0
         self.current_visitor_credits = 0
         self.last_credit_alert = None
         
-        # Target tracking
         self.top_bidder_tracking = {
             'daily_target_minutes': random.randint(360, 480),
             'current_minutes_today': 0,
@@ -60,28 +54,19 @@ class UltimateSmartBidder:
             'is_currently_top': False
         }
         
-        # SMART ANALYTICS SYSTEM
         self.analytics = {
-            # Position-based view tracking
-            'when_top': {},           # {'14': [45,52,48], '15': [38,42]}
-            'when_not_top': {},       # {'14': [18,22,15], '15': [12,15]}
-            
-            # Performance metrics
-            'peak_hours': [],         # [16,14,15] - top performing hours
-            'low_view_hours': [],     # [1,2,5] - hours to skip bidding
-            'performance_boost': {},  # {'14': 136, '15': 180} - % boost
-            
-            # Tracking data
+            'when_top': {},
+            'when_not_top': {},
+            'peak_hours': [],
+            'low_view_hours': [],
+            'performance_boost': {},
             'bid_attempts': 0,
             'bid_successes': 0,
             'today_views': 0,
             'last_calculation': None,
-            
-            # IP information
             'render_ip': 'Unknown'
         }
         
-        # Statistics
         self.stats = {
             'start_time': None,
             'checks_made': 0,
@@ -90,15 +75,49 @@ class UltimateSmartBidder:
             'credits_saved': 0
         }
         
-        # Get Render IP on startup
+        self.load_bot_state()
         self.get_render_ip()
+
+    def save_bot_state(self):
+        try:
+            state_data = {
+                'campaigns': self.campaigns,
+                'analytics': self.analytics,
+                'stats': self.stats,
+                'top_bidder_tracking': self.top_bidder_tracking,
+                'frequency_modes': self.frequency_modes,
+                'last_update_id': self.last_update_id,
+                'session_valid': self.session_valid,
+                'is_monitoring': self.is_monitoring
+            }
+            with open('bot_state.pkl', 'wb') as f:
+                pickle.dump(state_data, f)
+            logger.info("💾 Bot state saved")
+        except Exception as e:
+            logger.error(f"❌ Save state error: {e}")
+
+    def load_bot_state(self):
+        try:
+            if os.path.exists('bot_state.pkl'):
+                with open('bot_state.pkl', 'rb') as f:
+                    state_data = pickle.load(f)
+                    self.campaigns = state_data.get('campaigns', {})
+                    self.analytics = state_data.get('analytics', self.analytics.copy())
+                    self.stats = state_data.get('stats', self.stats.copy())
+                    self.top_bidder_tracking = state_data.get('top_bidder_tracking', self.top_bidder_tracking.copy())
+                    self.frequency_modes = state_data.get('frequency_modes', self.frequency_modes.copy())
+                    self.last_update_id = state_data.get('last_update_id', 0)
+                    self.session_valid = state_data.get('session_valid', False)
+                    self.is_monitoring = state_data.get('is_monitoring', False)
+                logger.info("📂 Bot state loaded")
+        except Exception as e:
+            logger.error(f"❌ Load state error: {e}")
 
     def rotate_user_agent(self):
         user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
         self.session.headers.update({'User-Agent': random.choice(user_agents)})
 
     def get_render_ip(self):
-        """Get and store Render's current IP address"""
         try:
             response = requests.get('https://httpbin.org/ip', timeout=10)
             ip_data = response.json()
@@ -113,7 +132,6 @@ class UltimateSmartBidder:
         return delay
 
     def force_login(self):
-        """Smart login with dynamic password field detection"""
         try:
             logger.info("🔄 Logging in...")
             self.human_delay(2, 4)
@@ -131,7 +149,6 @@ class UltimateSmartBidder:
             action_path = form.get('action', '')
             post_url = f"https://adsha.re{action_path}" if not action_path.startswith('http') else action_path
             
-            # DYNAMIC PASSWORD FIELD DETECTION
             password_field = None
             for field in form.find_all('input'):
                 field_name = field.get('name', '')
@@ -195,7 +212,6 @@ class UltimateSmartBidder:
             return 0
 
     def get_visitor_credits(self):
-        """Fixed comma parsing for visitor credits"""
         try:
             response = self.session.get("https://adsha.re/adverts", timeout=30)
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -208,7 +224,6 @@ class UltimateSmartBidder:
             return 0
 
     def check_credit_safety(self):
-        """Credit safety - SEPARATE from campaign loading"""
         self.current_traffic_credits = self.get_traffic_credits()
         self.current_visitor_credits = self.get_visitor_credits()
         
@@ -226,7 +241,6 @@ class UltimateSmartBidder:
         return True
 
     def update_analytics_data(self, campaign_name, is_top_bidder, current_views):
-        """Track detailed analytics for smart strategy"""
         current_hour = datetime.now().hour
         
         if campaign_name in self.campaigns:
@@ -239,7 +253,6 @@ class UltimateSmartBidder:
             if views_increase > 0:
                 self.analytics['today_views'] += views_increase
                 
-                # Track views by position
                 hour_str = str(current_hour)
                 if is_top_bidder:
                     if hour_str not in self.analytics['when_top']:
@@ -253,13 +266,11 @@ class UltimateSmartBidder:
             campaign_data['last_views_count'] = current_views
 
     def calculate_smart_strategy(self):
-        """Calculate peak hours, low-view hours, and performance boosts"""
-        if len(self.analytics['when_top']) < 4:  # Need minimum data
+        if len(self.analytics['when_top']) < 4:
             return
         
         hourly_performance = {}
         
-        # Calculate average views per hour for both positions
         for hour in range(24):
             hour_str = str(hour)
             top_views = self.analytics['when_top'].get(hour_str, [])
@@ -269,7 +280,6 @@ class UltimateSmartBidder:
                 avg_top = sum(top_views) / len(top_views)
                 avg_not_top = sum(not_top_views) / len(not_top_views)
                 
-                # Calculate performance boost
                 if avg_not_top > 0:
                     boost = ((avg_top - avg_not_top) / avg_not_top) * 100
                     hourly_performance[hour] = {
@@ -281,31 +291,26 @@ class UltimateSmartBidder:
         if not hourly_performance:
             return
         
-        # Calculate overall average for threshold
         all_top_views = []
         for views in self.analytics['when_top'].values():
             all_top_views.extend(views)
         
         overall_avg = sum(all_top_views) / len(all_top_views) if all_top_views else 0
         
-        # Identify peak hours (top 4 by boost)
         sorted_by_boost = sorted(hourly_performance.items(), key=lambda x: x[1]['boost'], reverse=True)
         self.analytics['peak_hours'] = [hour for hour, _ in sorted_by_boost[:4]]
         
-        # Identify low-view hours (below 50% of average)
         self.analytics['low_view_hours'] = []
         for hour, data in hourly_performance.items():
             if data['avg_top'] < overall_avg * 0.5:
                 self.analytics['low_view_hours'].append(hour)
         
-        # Store performance boosts
         self.analytics['performance_boost'] = {str(hour): data['boost'] for hour, data in hourly_performance.items()}
         self.analytics['last_calculation'] = datetime.now().isoformat()
         
         logger.info(f"🎯 Strategy Updated - Peak: {self.analytics['peak_hours']}, Low: {self.analytics['low_view_hours']}")
 
     def should_skip_bidding(self):
-        """Check if current hour is low-view hour"""
         current_hour = datetime.now().hour
         if current_hour in self.analytics['low_view_hours']:
             logger.info(f"⏸️ Skipping bid - low views at {current_hour}:00")
@@ -313,19 +318,15 @@ class UltimateSmartBidder:
         return False
 
     def calculate_smart_frequency(self):
-        """Smart frequency with peak hours and low-view skipping"""
         current_hour = datetime.now().hour
         
-        # Skip bidding during low-view hours
         if self.should_skip_bidding():
-            return random.randint(1800, 3600)  # 30-60 min checks when skipping
+            return random.randint(1800, 3600)
         
-        # Aggressive during peak hours
         if current_hour in self.analytics['peak_hours']:
             self.frequency_modes['current_mode'] = 'aggressive'
             return random.randint(120, 180)
         
-        # Normal logic
         target = self.top_bidder_tracking['daily_target_minutes']
         current = self.top_bidder_tracking['current_minutes_today']
         
@@ -490,19 +491,14 @@ class UltimateSmartBidder:
         self.send_telegram(status_msg)
 
     def send_analytics_report(self):
-        self.calculate_smart_strategy()  # Ensure latest calculations
+        self.calculate_smart_strategy()
         
         if not self.analytics['peak_hours']:
             self.send_telegram("📊 Collecting analytics data... check back in a few hours")
             return
 
-        # Format peak hours
         peak_hours_str = ", ".join([f"{h}:00" for h in self.analytics['peak_hours']])
-        
-        # Format low-view hours
         low_view_str = ", ".join([f"{h}:00" for h in self.analytics['low_view_hours']]) if self.analytics['low_view_hours'] else "None"
-        
-        # Calculate performance metrics
         bid_success_rate = (self.analytics['bid_successes'] / self.analytics['bid_attempts'] * 100) if self.analytics['bid_attempts'] > 0 else 0
         
         analytics_msg = f"""
@@ -516,7 +512,6 @@ class UltimateSmartBidder:
 📈 PERFORMANCE BOOST:
 """
         
-        # Add top 3 performing hours
         for hour in self.analytics['peak_hours'][:3]:
             boost = self.analytics['performance_boost'].get(str(hour), 0)
             analytics_msg += f"   {hour}:00 → +{boost:.1f}% boost\n"
@@ -584,7 +579,6 @@ class UltimateSmartBidder:
         self.send_telegram(campaigns_msg)
 
     def backup_analytics(self):
-        """Backup analytics data via Telegram"""
         backup_data = json.dumps(self.analytics, indent=2)
         self.send_telegram(f"📊 ANALYTICS BACKUP:\n```{backup_data}```")
         self.send_telegram("✅ Backup completed!")
@@ -616,11 +610,9 @@ class UltimateSmartBidder:
             soup = BeautifulSoup(html_content, 'html.parser')
             new_campaigns = {}
             
-            # Exact selector from HTML
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
             
             for div in campaign_divs:
-                # Extract clean campaign name
                 campaign_name = ""
                 for element in div.contents:
                     if isinstance(element, str) and element.strip():
@@ -629,7 +621,6 @@ class UltimateSmartBidder:
                     elif element.name == 'br':
                         break
                 
-                # Clean up campaign name
                 if 'http' in campaign_name:
                     campaign_name = campaign_name.split('http')[0].strip()
                 campaign_name = campaign_name.rstrip('.:- ')
@@ -639,11 +630,9 @@ class UltimateSmartBidder:
                 
                 text_content = div.get_text()
                 
-                # Extract bid from "Campaign Bid: 151"
                 bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                 my_bid = int(bid_match.group(1)) if bid_match else 0
                 
-                # Extract views and hits
                 views_match = re.search(r'(\d+)\s*/\s*(\d+)\s*visitors', text_content)
                 hits_match = re.search(r'(\d+)\s*hits', text_content)
                 
@@ -652,14 +641,13 @@ class UltimateSmartBidder:
                 total_hits = int(hits_match.group(1)) if hits_match else 0
                 
                 if campaign_name and my_bid > 0:
-                    # Preserve auto_bid setting
                     auto_bid = False
                     if campaign_name in self.campaigns:
                         auto_bid = self.campaigns[campaign_name].get('auto_bid', False)
                     
                     new_campaigns[campaign_name] = {
                         'my_bid': my_bid,
-                        'top_bid': my_bid,  # Will be updated from bid page
+                        'top_bid': my_bid,
                         'auto_bid': auto_bid,
                         'last_bid_time': None,
                         'last_checked': None,
@@ -695,7 +683,6 @@ class UltimateSmartBidder:
                     response = self.session.get(bid_url, timeout=30)
                     self.human_delay(1, 2)
                     
-                    # Extract top bid from bid page HTML
                     soup = BeautifulSoup(response.content, 'html.parser')
                     top_bid_text = soup.get_text()
                     top_bid_match = re.search(r'top bid is (\d+) credits', top_bid_text)
@@ -725,18 +712,14 @@ class UltimateSmartBidder:
 
     def execute_smart_auto_bid(self, campaign_name, campaign_data, current_top_bid):
         try:
-            # Track bid attempt
             self.analytics['bid_attempts'] += 1
             
-            # Only bid if we're not top bidder
             if campaign_data['my_bid'] >= current_top_bid:
                 return
             
-            # Calculate minimal bid
             old_bid = campaign_data['my_bid']
             new_bid = self.calculate_minimal_bid(current_top_bid)
             
-            # Don't bid if no change or decrease
             if new_bid <= old_bid:
                 return
             
@@ -772,17 +755,13 @@ class UltimateSmartBidder:
             if not action.startswith('http'):
                 action = f"https://adsha.re{action}"
             
-            # Correct form data
             bid_data = {'bid': str(new_bid), 'vis': '0'}
             self.human_delay(2, 4)
             
             response = self.session.post(action, data=bid_data, allow_redirects=True)
             
             if response.status_code == 200:
-                # Track successful bid
                 self.analytics['bid_successes'] += 1
-                
-                # Success - update campaign data
                 campaign_data['my_bid'] = new_bid
                 campaign_data['last_bid_time'] = datetime.now()
                 
@@ -814,17 +793,14 @@ class UltimateSmartBidder:
             return
         
         try:
-            # ALWAYS LOAD CAMPAIGNS FIRST (regardless of credits)
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay(1, 2)
             
             new_campaigns_data = self.parse_campaigns(response.content)
             
-            # Update campaigns while preserving settings
             for campaign_name, new_data in new_campaigns_data.items():
                 if campaign_name in self.campaigns:
-                    # Preserve auto_bid and update other data
                     auto_bid = self.campaigns[campaign_name].get('auto_bid', False)
                     self.campaigns[campaign_name].update(new_data)
                     self.campaigns[campaign_name]['auto_bid'] = auto_bid
@@ -834,33 +810,29 @@ class UltimateSmartBidder:
             if not self.campaigns:
                 return
             
-            # Check credits SEPARATELY - only affects bidding, not campaign operations
             credit_safe = self.check_credit_safety()
             
-            # Check each campaign
             for campaign_name, campaign_data in self.campaigns.items():
                 top_bid = self.get_top_bid_from_bid_page(campaign_name)
                 
                 if top_bid:
-                    # Update top bid
                     old_top_bid = campaign_data.get('top_bid', 0)
                     campaign_data['top_bid'] = top_bid
                     campaign_data['last_checked'] = datetime.now()
                     
-                    # Update top bidder tracking
                     is_top_bidder = campaign_data['my_bid'] >= top_bid
                     self.update_top_bidder_tracking(campaign_name, is_top_bidder)
                     
-                    # Update performance analytics - CRITICAL FOR PEAK HOUR CALCULATION
                     self.update_analytics_data(campaign_name, is_top_bidder, campaign_data['views']['current'])
                     
                     logger.info(f"📊 {campaign_name}: Your {campaign_data['my_bid']}, Top {top_bid}, Top: {is_top_bidder}")
                     
-                    # Smart auto-bid logic - ONLY AFFECTED BY CREDIT SAFETY
                     if (credit_safe and campaign_data['auto_bid'] and 
                         not self.should_skip_bid_with_random_hold(campaign_name)):
                         
                         self.execute_smart_auto_bid(campaign_name, campaign_data, top_bid)
+                        
+            self.save_bot_state()
                         
         except Exception as e:
             logger.error(f"Check error: {e}")
@@ -907,25 +879,26 @@ class UltimateSmartBidder:
         last_command_check = 0
         last_campaign_check = 0
         last_strategy_calculation = 0
+        last_save_time = time.time()
         
         while True:
             try:
                 current_time = time.time()
                 
-                # Process commands
                 if current_time - last_command_check >= 3:
                     self.process_telegram_command()
                     last_command_check = current_time
                 
-                # Recalculate strategy every 6 hours
-                if current_time - last_strategy_calculation >= 21600:  # 6 hours
+                if current_time - last_strategy_calculation >= 21600:
                     self.calculate_smart_strategy()
                     last_strategy_calculation = current_time
                 
-                # Reset daily target if needed
                 self.reset_daily_target_if_needed()
                 
-                # Campaign checking
+                if current_time - last_save_time >= 300:
+                    self.save_bot_state()
+                    last_save_time = current_time
+                
                 if self.is_monitoring:
                     check_interval = self.calculate_smart_frequency()
                     
@@ -942,7 +915,6 @@ class UltimateSmartBidder:
                 logger.error(f"Main loop error: {e}")
                 time.sleep(30)
 
-# Flask routes
 @app.route('/')
 def home():
     return "🤖 Ultimate Smart Bidder - Active"
@@ -960,7 +932,7 @@ def show_ip():
 
 def run_bot():
     bot = UltimateSmartBidder()
-    app.bot_instance = bot  # Make bot accessible to routes
+    app.bot_instance = bot
     bot.run()
 
 if __name__ == "__main__":
