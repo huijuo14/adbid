@@ -24,6 +24,7 @@ class SmartBidder:
         self.chat_id = os.environ.get('CHAT_ID', "2052085789")
         self.email = os.environ.get('EMAIL', "loginallapps@gmail.com")
         self.password = os.environ.get('PASSWORD', "@Sd2007123")
+        self.github_token = os.environ.get('GITHUB_TOKEN')  # NO DEFAULT - USE RAILWAY ENV
         self.last_update_id = 0
         
         self.session = requests.Session()
@@ -46,9 +47,12 @@ class SmartBidder:
         self.bid_cooldown = 60
         
         # Load saved data
-        self.load_from_github()
+        if self.github_token:
+            self.load_from_github()
+        else:
+            logger.warning("GitHub token not set - data persistence disabled")
         
-        logger.info("Smart Bidder initialized with GitHub persistence")
+        logger.info("Smart Bidder initialized")
 
     def rotate_user_agent(self):
         user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
@@ -67,6 +71,10 @@ class SmartBidder:
 
     def save_to_github(self):
         """Save data to GitHub Gist"""
+        if not self.github_token:
+            logger.warning("GitHub token not set - skipping save")
+            return False
+            
         try:
             data = {
                 'bid_history': self.bid_history,
@@ -94,7 +102,6 @@ class SmartBidder:
                 "Content-Type": "application/json"
             }
             
-            # Try to update existing gist or create new
             url = "https://api.github.com/gists"
             response = self.session.post(url, json=gist_data, headers=headers, timeout=30)
             
@@ -112,6 +119,10 @@ class SmartBidder:
 
     def load_from_github(self):
         """Load data from GitHub Gist"""
+        if not self.github_token:
+            logger.warning("GitHub token not set - skipping load")
+            return False
+            
         try:
             headers = {
                 "Authorization": f"token {self.github_token}",
@@ -160,6 +171,13 @@ class SmartBidder:
         except Exception as e:
             logger.error(f"GitHub load error: {e}")
             return False
+
+    # ... (REST OF THE METHODS STAY EXACTLY THE SAME AS BEFORE)
+    # human_delay, force_login, check_session_valid, smart_login, parse_campaigns, 
+    # get_top_bid, get_visitor_credits, get_traffic_credits, send_telegram, 
+    # check_bid_drop, process_telegram_command, handle_command, handle_auto_command,
+    # start_monitoring, stop_monitoring, send_enhanced_status, send_campaigns_list,
+    # send_bid_history, set_max_bid, send_help, send_hourly_status, check_and_alert, run
 
     def human_delay(self, min_seconds=1, max_seconds=3):
         time.sleep(random.uniform(min_seconds, max_seconds))
@@ -674,7 +692,8 @@ Perfect time to start new campaign!
             logger.error("Failed to start - login failed")
             return
         
-        self.send_telegram("🤖 SMART BIDDER STARTED!\n• GitHub persistence enabled\n• IST timezone\n• Campaign tracking\nType /help for commands")
+        persistence_status = "with GitHub persistence" if self.github_token else "without persistence"
+        self.send_telegram(f"🤖 SMART BIDDER STARTED!\n• {persistence_status}\n• IST timezone\n• Campaign tracking\nType /help for commands")
         
         last_check = 0
         last_command_check = 0
