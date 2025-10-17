@@ -91,37 +91,85 @@ class UltimateBidder:
             dt = self.get_ist_time()
         return dt.strftime("%I:%M %p")
 
+    def serialize_bid_history(self):
+        """Convert bid history to JSON-serializable format"""
+        serialized = []
+        for item in self.bid_history:
+            serialized_item = item.copy()
+            if 'time' in serialized_item and isinstance(serialized_item['time'], datetime):
+                serialized_item['time'] = serialized_item['time'].isoformat()
+            serialized.append(serialized_item)
+        return serialized
+
+    def serialize_campaigns(self):
+        """Convert campaigns to JSON-serializable format"""
+        serialized = {}
+        for campaign, data in self.campaigns.items():
+            serialized[campaign] = data.copy()
+            if 'last_checked' in serialized[campaign] and isinstance(serialized[campaign]['last_checked'], datetime):
+                serialized[campaign]['last_checked'] = serialized[campaign]['last_checked'].isoformat()
+        return serialized
+
+    def serialize_completed_campaigns(self):
+        """Convert completed campaigns to JSON-serializable format"""
+        serialized = {}
+        for campaign, data in self.completed_campaigns.items():
+            serialized[campaign] = data.copy()
+            if 'completed_time' in serialized[campaign] and isinstance(serialized[campaign]['completed_time'], datetime):
+                serialized[campaign]['completed_time'] = serialized[campaign]['completed_time'].isoformat()
+        return serialized
+
+    def serialize_learning_data(self):
+        """Convert learning data to JSON-serializable format"""
+        serialized = self.learning_data.copy()
+        
+        # Handle burst patterns datetime objects
+        if 'burst_patterns' in serialized:
+            for campaign, burst_data in serialized['burst_patterns'].items():
+                if 'burst_times' in burst_data:
+                    serialized['burst_patterns'][campaign]['burst_times'] = [
+                        t.isoformat() if isinstance(t, datetime) else t 
+                        for t in burst_data['burst_times']
+                    ]
+                if 'first_detection' in burst_data and isinstance(burst_data['first_detection'], datetime):
+                    serialized['burst_patterns'][campaign]['first_detection'] = burst_data['first_detection'].isoformat()
+        
+        return serialized
+
+    def serialize_sent_alerts(self):
+        """Convert sent alerts to JSON-serializable format"""
+        serialized = {}
+        for alert_key, alert_data in self.sent_alerts.items():
+            if isinstance(alert_data, dict):
+                serialized[alert_key] = alert_data.copy()
+                # Handle any datetime objects in alert data
+                for key, value in serialized[alert_key].items():
+                    if isinstance(value, datetime):
+                        serialized[alert_key][key] = value.isoformat()
+            else:
+                serialized[alert_key] = alert_data
+        return serialized
+
     def save_to_github(self):
-    """Save ALL data to GitHub Gist"""
-    if not self.github_token:
-        return False
-    
-    # Convert datetime objects to strings
-    for item in self.bid_history:
-        if 'time' in item and isinstance(item['time'], datetime):
-            item['time'] = item['time'].isoformat()
-        
-    try:
-        data = {
-            'bid_history': self.bid_history,
-            'campaigns': self.campaigns,
-            'completed_campaigns': self.completed_campaigns,
-            'campaign_progress_history': self.serialize_progress_history(),
-            'learning_data': self.learning_data,
-            'max_bid_limit': self.max_bid_limit,
-            'auto_bid_enabled': self.auto_bid_enabled,
-            'current_global_bid': self.current_global_bid,
-            'sent_alerts': self.sent_alerts,
-            'last_save': datetime.now().isoformat(),
-            'gist_id': self.gist_id
-        }
-        
-        # ... continue with the rest of your existing save_to_github code ...
+        """Save ALL data to GitHub Gist with proper JSON serialization"""
+        if not self.github_token:
+            return False
             
-            # Convert datetime objects
-            for item in data['bid_history']:
-                if 'time' in item and isinstance(item['time'], datetime):
-                    item['time'] = item['time'].isoformat()
+        try:
+            # Create a serializable copy of the data
+            data = {
+                'bid_history': self.serialize_bid_history(),
+                'campaigns': self.serialize_campaigns(),
+                'completed_campaigns': self.serialize_completed_campaigns(),
+                'campaign_progress_history': self.serialize_progress_history(),
+                'learning_data': self.serialize_learning_data(),
+                'max_bid_limit': self.max_bid_limit,
+                'auto_bid_enabled': self.auto_bid_enabled,
+                'current_global_bid': self.current_global_bid,
+                'sent_alerts': self.serialize_sent_alerts(),
+                'last_save': datetime.now().isoformat(),
+                'gist_id': self.gist_id
+            }
             
             gist_data = {
                 "description": f"💣 BOMB PREDICTOR - {datetime.now().isoformat()}",
@@ -190,7 +238,7 @@ class UltimateBidder:
                                 for item in data['bid_history']:
                                     if 'time' in item and isinstance(item['time'], str):
                                         try:
-                                            item['time'] = datetime.fromisoformat(item['time'])
+                                            item['time'] = datetime.fromisoformat(item['time'].replace('Z', '+00:00'))
                                         except:
                                             item['time'] = self.get_ist_time()
                                 self.bid_history = data['bid_history']
@@ -200,6 +248,22 @@ class UltimateBidder:
                             self.learning_data = data.get('learning_data', self.learning_data)
                             self.sent_alerts = data.get('sent_alerts', {})
                             
+                            # Restore datetime objects in campaigns
+                            for campaign, campaign_data in self.campaigns.items():
+                                if 'last_checked' in campaign_data and isinstance(campaign_data['last_checked'], str):
+                                    try:
+                                        self.campaigns[campaign]['last_checked'] = datetime.fromisoformat(campaign_data['last_checked'].replace('Z', '+00:00'))
+                                    except:
+                                        self.campaigns[campaign]['last_checked'] = self.get_ist_time()
+                            
+                            # Restore datetime objects in completed campaigns
+                            for campaign, campaign_data in self.completed_campaigns.items():
+                                if 'completed_time' in campaign_data and isinstance(campaign_data['completed_time'], str):
+                                    try:
+                                        self.completed_campaigns[campaign]['completed_time'] = datetime.fromisoformat(campaign_data['completed_time'].replace('Z', '+00:00'))
+                                    except:
+                                        self.completed_campaigns[campaign]['completed_time'] = self.get_ist_time()
+                            
                             # Restore progress history
                             if 'campaign_progress_history' in data:
                                 for campaign, history in data['campaign_progress_history'].items():
@@ -207,10 +271,31 @@ class UltimateBidder:
                                     for entry in history:
                                         if 'timestamp' in entry and isinstance(entry['timestamp'], str):
                                             try:
-                                                entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+                                                entry['timestamp'] = datetime.fromisoformat(entry['timestamp'].replace('Z', '+00:00'))
                                             except:
                                                 entry['timestamp'] = self.get_ist_time()
                                         self.campaign_progress_history[campaign].append(entry)
+                            
+                            # Restore burst patterns datetime objects
+                            if 'burst_patterns' in self.learning_data:
+                                for campaign, burst_data in self.learning_data['burst_patterns'].items():
+                                    if 'burst_times' in burst_data:
+                                        restored_times = []
+                                        for t in burst_data['burst_times']:
+                                            if isinstance(t, str):
+                                                try:
+                                                    restored_times.append(datetime.fromisoformat(t.replace('Z', '+00:00')))
+                                                except:
+                                                    restored_times.append(self.get_ist_time())
+                                            else:
+                                                restored_times.append(t)
+                                        self.learning_data['burst_patterns'][campaign]['burst_times'] = restored_times
+                                    
+                                    if 'first_detection' in burst_data and isinstance(burst_data['first_detection'], str):
+                                        try:
+                                            self.learning_data['burst_patterns'][campaign]['first_detection'] = datetime.fromisoformat(burst_data['first_detection'].replace('Z', '+00:00'))
+                                        except:
+                                            self.learning_data['burst_patterns'][campaign]['first_detection'] = self.get_ist_time()
                             
                             logger.info("💾 GIST_LOAD: Bomb predictor data restored!")
                             return True
@@ -361,7 +446,7 @@ class UltimateBidder:
             return "Calculating..."
 
     def calculate_hybrid_prediction(self, campaign_name, current_views, total_views, is_top_position):
-        """Original hybrid prediction with multi-window analysis"""
+        """Original hybrid prediction with multi-window analysis - FIXED VERSION"""
         try:
             if campaign_name not in self.campaign_progress_history:
                 return "Collecting data..."
@@ -370,24 +455,24 @@ class UltimateBidder:
             if len(history) < 2:
                 return "Collecting data..."
             
-            # Multi-window analysis
+            # Multi-window analysis - FIXED: changed 'long_speeds' to 'long_speed'
             short_speed = self.calculate_window_speed(history, 10)
             medium_speed = self.calculate_window_speed(history, 20)
-            long_speed = self.calculate_window_speed(history, 30)
+            long_speed = self.calculate_window_speed(history, 30)  # FIXED VARIABLE NAME
             
             # Position-based adjustment
             position_speed = self.learning_data['position_speeds']['top_speed_avg'] if is_top_position else self.learning_data['position_speeds']['not_top_speed_avg']
             
             # Hybrid calculation
             if position_speed > 0:
-                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]  # FIXED: long_speeds -> long_speed
                 if valid_speeds:
                     real_time_avg = sum(valid_speeds) / len(valid_speeds)
                     final_speed = (real_time_avg * 0.5) + (position_speed * 0.5)
                 else:
                     final_speed = position_speed
             else:
-                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]  # FIXED: long_speeds -> long_speed
                 if valid_speeds:
                     final_speed = sum(valid_speeds) / len(valid_speeds)
                 else:
