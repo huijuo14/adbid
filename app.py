@@ -8,11 +8,12 @@ from datetime import datetime
 import os
 import json
 import pytz
+import base64
 
-# Basic logging setup
+# Enhanced logging setup
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger()
@@ -41,6 +42,7 @@ class SmartBidder:
         self.campaigns = {}
         self.last_alert_time = 0
         self.last_save_time = 0
+        self.current_global_bid = 0
         
         # Timing
         self.check_interval = 300  # 5 minutes
@@ -52,7 +54,7 @@ class SmartBidder:
         else:
             logger.warning("GitHub token not set - data persistence disabled")
         
-        logger.info("Smart Bidder initialized")
+        logger.info("Smart Bidder initialized with global bid tracking")
 
     def rotate_user_agent(self):
         user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
@@ -72,6 +74,7 @@ class SmartBidder:
     def save_to_github(self):
         """Save data to GitHub Repository"""
         if not self.github_token:
+            logger.warning("GITHUB_SAVE: No token - skipping save")
             return False
             
         try:
@@ -80,6 +83,7 @@ class SmartBidder:
                 'campaigns': self.campaigns,
                 'max_bid_limit': self.max_bid_limit,
                 'auto_bid_enabled': self.auto_bid_enabled,
+                'current_global_bid': self.current_global_bid,
                 'last_save': datetime.now().isoformat()
             }
             
@@ -102,13 +106,16 @@ class SmartBidder:
             }
             
             # Get current file SHA
+            logger.info("GITHUB_SAVE: Getting current file...")
             response = self.session.get(repo_url, headers=headers)
             sha = None
             if response.status_code == 200:
                 sha = response.json().get('sha')
+                logger.info("GITHUB_SAVE: Found existing file, will update")
+            else:
+                logger.info("GITHUB_SAVE: No existing file, will create new")
             
             # Create/update file
-            import base64
             content = json.dumps(data, indent=2)
             content_bytes = content.encode('utf-8')
             content_b64 = base64.b64encode(content_bytes).decode('utf-8')
@@ -119,23 +126,25 @@ class SmartBidder:
                 "sha": sha
             }
             
+            logger.info("GITHUB_SAVE: Sending data to GitHub...")
             response = self.session.put(repo_url, json=payload, headers=headers, timeout=30)
             
             if response.status_code in [200, 201]:
-                logger.info("Data saved to GitHub Repository")
+                logger.info("GITHUB_SAVE: Data saved successfully")
                 self.last_save_time = time.time()
                 return True
             else:
-                logger.error(f"GitHub repo save failed: {response.status_code} - {response.text}")
+                logger.error(f"GITHUB_SAVE: Failed - {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"GitHub repo save error: {e}")
+            logger.error(f"GITHUB_SAVE: Error - {e}")
             return False
 
     def load_from_github(self):
         """Load data from GitHub Repository"""
         if not self.github_token:
+            logger.warning("GITHUB_LOAD: No token - skipping load")
             return False
             
         try:
@@ -145,48 +154,63 @@ class SmartBidder:
             }
             
             repo_url = "https://api.github.com/repos/ShreyanshShah/bidbot-data/contents/bot_data.json"
+            logger.info("GITHUB_LOAD: Fetching data from GitHub...")
             response = self.session.get(repo_url, headers=headers, timeout=30)
             
             if response.status_code == 200:
-                import base64
                 content_b64 = response.json().get('content', '')
                 content = base64.b64decode(content_b64).decode('utf-8')
                 data = json.loads(content)
                 
+                logger.info("GITHUB_LOAD: Data fetched, restoring...")
+                
                 # Restore bid history
                 if 'bid_history' in data:
+                    restored_count = 0
                     for item in data['bid_history']:
                         if 'time' in item and isinstance(item['time'], str):
                             try:
                                 item['time'] = datetime.fromisoformat(item['time'])
+                                restored_count += 1
                             except:
                                 item['time'] = self.get_ist_time()
                     self.bid_history = data['bid_history']
+                    logger.info(f"GITHUB_LOAD: Restored {restored_count} bid history records")
                 
-                # Restore campaigns
+                # Restore campaigns with merging
                 if 'campaigns' in data:
+                    restored_campaigns = 0
                     for campaign_name, campaign_data in data['campaigns'].items():
                         if 'last_checked' in campaign_data and isinstance(campaign_data['last_checked'], str):
                             try:
                                 campaign_data['last_checked'] = datetime.fromisoformat(campaign_data['last_checked'])
                             except:
                                 campaign_data['last_checked'] = self.get_ist_time()
-                    self.campaigns = data['campaigns']
+                        self.campaigns[campaign_name] = campaign_data
+                        restored_campaigns += 1
+                    logger.info(f"GITHUB_LOAD: Restored {restored_campaigns} campaigns")
                 
                 # Restore settings
                 if 'max_bid_limit' in data:
                     self.max_bid_limit = data['max_bid_limit']
+                    logger.info(f"GITHUB_LOAD: Restored max bid limit: {self.max_bid_limit}")
+                
                 if 'auto_bid_enabled' in data:
                     self.auto_bid_enabled = data['auto_bid_enabled']
+                    logger.info(f"GITHUB_LOAD: Restored auto-bid: {self.auto_bid_enabled}")
                 
-                logger.info("Data loaded from GitHub")
+                if 'current_global_bid' in data:
+                    self.current_global_bid = data['current_global_bid']
+                    logger.info(f"GITHUB_LOAD: Restored global bid: {self.current_global_bid}")
+                
+                logger.info("GITHUB_LOAD: Data restoration completed")
                 return True
             else:
-                logger.info("No existing data found on GitHub")
+                logger.info("GITHUB_LOAD: No existing data found - starting fresh")
                 return False
             
         except Exception as e:
-            logger.error(f"GitHub load error: {e}")
+            logger.error(f"GITHUB_LOAD: Error - {e}")
             return False
 
     def human_delay(self, min_seconds=1, max_seconds=3):
@@ -194,7 +218,7 @@ class SmartBidder:
 
     def force_login(self):
         try:
-            logger.info("Logging in...")
+            logger.info("LOGIN: Attempting login...")
             login_url = "https://adsha.re/login"
             response = self.session.get(login_url, timeout=30)
             self.human_delay()
@@ -202,7 +226,7 @@ class SmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             form = soup.find('form', {'name': 'login'})
             if not form:
-                logger.error("Login form not found")
+                logger.error("LOGIN: Login form not found")
                 return False
                 
             action_path = form.get('action', '')
@@ -217,7 +241,7 @@ class SmartBidder:
                     break
             
             if not password_field:
-                logger.error("Password field not found")
+                logger.error("LOGIN: Password field not found")
                 return False
             
             login_data = {
@@ -232,13 +256,13 @@ class SmartBidder:
             response = self.session.get("https://adsha.re/adverts", timeout=10, allow_redirects=False)
             if response.status_code == 200 and "Create New Campaign" in response.text:
                 self.session_valid = True
-                logger.info("Login successful")
+                logger.info("LOGIN: Successful")
                 return True
             
-            logger.error("Login failed")
+            logger.error("LOGIN: Failed - invalid credentials or session")
             return False
         except Exception as e:
-            logger.error(f"Login error: {e}")
+            logger.error(f"LOGIN: Error - {e}")
             return False
 
     def check_session_valid(self):
@@ -255,12 +279,15 @@ class SmartBidder:
 
     def smart_login(self):
         if self.check_session_valid():
+            logger.info("SESSION: Valid session detected")
             return True
+        logger.warning("SESSION: Session expired, re-login required")
         return self.force_login()
 
     def parse_campaigns(self):
-        """FIXED: Parse all campaigns from adverts page"""
+        """Parse all campaigns from adverts page"""
         try:
+            logger.info("PARSING: Fetching adverts page...")
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay()
@@ -271,9 +298,9 @@ class SmartBidder:
             # Find ALL campaign divs (both active and completed)
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*'))
             
-            logger.info(f"Found {len(campaign_divs)} campaign divs")
+            logger.info(f"PARSING: Found {len(campaign_divs)} campaign divs")
             
-            for div in campaign_divs:
+            for i, div in enumerate(campaign_divs):
                 try:
                     # Extract campaign name - get first text content
                     campaign_name = ""
@@ -290,15 +317,16 @@ class SmartBidder:
                     campaign_name = campaign_name.rstrip('.:- ')
                     
                     if not campaign_name:
+                        logger.warning(f"PARSING: Div {i} - No campaign name found")
                         continue
                     
                     text_content = div.get_text()
                     
-                    # Extract your bid - FIXED regex
+                    # Extract your bid
                     bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                     your_bid = int(bid_match.group(1)) if bid_match else 0
                     
-                    # Extract progress - FIXED regex
+                    # Extract progress
                     progress_match = re.search(r'(\d+,?\d*)\s*/\s*(\d+,?\d*)\s*visitors', text_content.replace(',', ''))
                     if progress_match:
                         current_views = int(progress_match.group(1).replace(',', ''))
@@ -311,38 +339,38 @@ class SmartBidder:
                     completed = "COMPLETE" in text_content
                     active = "ACTIVE" in text_content
                     
-                    if campaign_name:
-                        # Get auto-bid setting from saved data
-                        auto_bid = self.campaigns.get(campaign_name, {}).get('auto_bid', False)
-                        
-                        campaigns[campaign_name] = {
-                            'your_bid': your_bid,
-                            'top_bid': your_bid,  # Will be updated with real top bid
-                            'auto_bid': auto_bid,
-                            'progress': f"{current_views:,}/{total_views:,}",
-                            'completion_pct': (current_views / total_views * 100) if total_views > 0 else 0,
-                            'completed': completed,
-                            'active': active,
-                            'status': 'COMPLETED' if completed else 'ACTIVE' if active else 'UNKNOWN',
-                            'last_checked': self.get_ist_time()
-                        }
-                        
-                        logger.info(f"Parsed campaign: {campaign_name} - Bid: {your_bid} - Progress: {current_views}/{total_views} - Status: {campaigns[campaign_name]['status']}")
-                        
+                    # Get auto-bid setting from saved data
+                    auto_bid = self.campaigns.get(campaign_name, {}).get('auto_bid', False)
+                    
+                    campaigns[campaign_name] = {
+                        'your_bid': your_bid,
+                        'top_bid': self.current_global_bid,  # Use global top bid
+                        'auto_bid': auto_bid,
+                        'progress': f"{current_views:,}/{total_views:,}",
+                        'completion_pct': (current_views / total_views * 100) if total_views > 0 else 0,
+                        'completed': completed,
+                        'active': active,
+                        'status': 'COMPLETED' if completed else 'ACTIVE' if active else 'UNKNOWN',
+                        'last_checked': self.get_ist_time()
+                    }
+                    
+                    logger.info(f"PARSING: '{campaign_name}' - Bid: {your_bid} - Progress: {current_views}/{total_views} - Status: {campaigns[campaign_name]['status']}")
+                    
                 except Exception as e:
-                    logger.error(f"Error parsing campaign: {e}")
+                    logger.error(f"PARSING: Error parsing div {i} - {e}")
                     continue
             
-            logger.info(f"Successfully parsed {len(campaigns)} campaigns")
+            logger.info(f"PARSING: Successfully parsed {len(campaigns)} campaigns")
             return campaigns
             
         except Exception as e:
-            logger.error(f"Parse campaigns error: {e}")
+            logger.error(f"PARSING: Error - {e}")
             return {}
 
-    def get_top_bid(self, campaign_name):
-        """Get current top bid for a campaign"""
+    def get_global_top_bid(self):
+        """Get the global top bid from any campaign"""
         try:
+            logger.info("BID_CHECK: Getting global top bid...")
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay()
@@ -350,28 +378,32 @@ class SmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             assign_links = soup.find_all('a', href=re.compile(r'/adverts/assign/'))
             
-            for link in assign_links:
-                campaign_div = link.find_parent('div')
-                if campaign_div and campaign_name in campaign_div.get_text():
-                    bid_url = link['href']
-                    if not bid_url.startswith('http'):
-                        bid_url = f"https://adsha.re{bid_url}"
-                    
-                    response = self.session.get(bid_url, timeout=30)
-                    self.human_delay()
-                    
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    page_text = soup.get_text()
-                    
-                    top_bid_match = re.search(r'top bid is (\d+) credits', page_text)
-                    if top_bid_match:
-                        top_bid = int(top_bid_match.group(1))
-                        logger.info(f"Top bid for {campaign_name}: {top_bid}")
-                        return top_bid
+            if not assign_links:
+                logger.warning("BID_CHECK: No assign links found")
+                return 0
             
+            # Use first campaign to check global top bid
+            first_link = assign_links[0]['href']
+            if not first_link.startswith('http'):
+                first_link = f"https://adsha.re{first_link}"
+            
+            logger.info(f"BID_CHECK: Checking bid page: {first_link}")
+            response = self.session.get(first_link, timeout=30)
+            self.human_delay()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            page_text = soup.get_text()
+            
+            top_bid_match = re.search(r'top bid is (\d+) credits', page_text)
+            if top_bid_match:
+                top_bid = int(top_bid_match.group(1))
+                logger.info(f"BID_CHECK: Global top bid = {top_bid} credits")
+                return top_bid
+            
+            logger.warning("BID_CHECK: No top bid found in page")
             return 0
         except Exception as e:
-            logger.error(f"Get top bid error for {campaign_name}: {e}")
+            logger.error(f"BID_CHECK: Error - {e}")
             return 0
 
     def get_visitor_credits(self):
@@ -384,7 +416,7 @@ class SmartBidder:
                 return int(visitors_str)
             return 0
         except Exception as e:
-            logger.error(f"Get visitor credits error: {e}")
+            logger.error(f"CREDITS: Visitor credits error - {e}")
             return 0
 
     def get_traffic_credits(self):
@@ -399,7 +431,7 @@ class SmartBidder:
                     return float(credit_match.group(1))
             return 0
         except Exception as e:
-            logger.error(f"Traffic credits error: {e}")
+            logger.error(f"CREDITS: Traffic credits error - {e}")
             return 0
 
     def send_telegram(self, message):
@@ -413,17 +445,20 @@ class SmartBidder:
             response = self.session.post(url, json=data, timeout=30)
             return response.status_code == 200
         except Exception as e:
-            logger.error(f"Telegram send error: {e}")
+            logger.error(f"TELEGRAM: Send error - {e}")
             return False
 
     def check_bid_drop(self, new_bid):
+        """Check if global bid dropped significantly"""
         if len(self.bid_history) < 2:
             return False, 0
         
         previous_bid = self.bid_history[-1]['bid']
         
-        if new_bid < previous_bid * 0.5:
+        # Alert if bid drops by more than 50 credits
+        if new_bid < previous_bid - 50:
             drop_amount = previous_bid - new_bid
+            logger.info(f"BID_ALERT: Drop detected {previous_bid} → {new_bid} (-{drop_amount})")
             return True, drop_amount
         
         return False, 0
@@ -447,7 +482,7 @@ class SmartBidder:
                                 continue
                             self.handle_command(text)
         except Exception as e:
-            logger.error(f"Telegram command error: {e}")
+            logger.error(f"TELEGRAM: Command error - {e}")
 
     def handle_command(self, command):
         command_lower = command.lower().strip()
@@ -507,16 +542,16 @@ class SmartBidder:
 
     def start_monitoring(self):
         self.is_monitoring = True
-        logger.info("Monitoring started")
-        self.send_telegram("🚀 SMART BIDDER ACTIVATED!\n\n24/7 monitoring with GitHub persistence!")
+        logger.info("MONITORING: Started")
+        self.send_telegram("🚀 SMART BIDDER ACTIVATED!\n\n24/7 monitoring with global bid tracking!")
 
     def stop_monitoring(self):
         self.is_monitoring = False
-        logger.info("Monitoring stopped")
+        logger.info("MONITORING: Stopped")
         self.send_telegram("🛑 Monitoring STOPPED")
 
     def send_enhanced_status(self):
-        """FIXED: Show all campaigns with proper formatting"""
+        """Enhanced status with global bid tracking"""
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
         current_time = self.format_ist_time()
@@ -526,6 +561,8 @@ class SmartBidder:
 
 💰 CREDITS:
 Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
+
+🎯 GLOBAL TOP BID: {self.current_global_bid} credits
 
 🏆 CAMPAIGN STATUS:
 """
@@ -549,7 +586,7 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         self.send_telegram(status_msg)
 
     def send_campaigns_list(self):
-        """FIXED: Show detailed campaign list"""
+        """Detailed campaign list"""
         if not self.campaigns:
             self.send_telegram("📊 No campaigns found yet. The bot is checking adverts page...")
             return
@@ -570,19 +607,28 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         self.send_telegram(campaigns_text)
 
     def send_bid_history(self):
+        """Enhanced bid history with global bids"""
         if not self.bid_history:
             self.send_telegram("📊 No bid history yet. Monitoring in progress...")
             return
         
-        history_msg = "📈 BID HISTORY (Last 10 changes):\n\n"
+        history_msg = "📈 GLOBAL BID HISTORY (Last 10 changes):\n\n"
         
         for record in self.bid_history[-10:]:
             if 'time' in record and isinstance(record['time'], datetime):
                 time_str = self.format_ist_time(record['time'])
             else:
                 time_str = "Unknown"
-            campaign = record.get('campaign', 'General')
-            history_msg += f"🕒 {time_str} - {record['bid']} credits ({campaign})\n"
+            history_msg += f"🕒 {time_str} - {record['bid']} credits\n"
+        
+        # Add current bid info
+        if self.bid_history:
+            current_bid = self.bid_history[-1]['bid']
+            if len(self.bid_history) >= 2:
+                previous_bid = self.bid_history[-2]['bid']
+                change = current_bid - previous_bid
+                change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                history_msg += f"\n{change_icon} Current: {current_bid} credits (Change: {change:+d})"
         
         self.send_telegram(history_msg)
 
@@ -605,17 +651,17 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 
 /start - Start 24/7 monitoring
 /stop - Stop monitoring
-/status - Enhanced status with campaigns
+/status - Enhanced status with global bids
 /campaigns - List all campaigns
-/bids - Bid history
+/bids - Global bid history
 /target [amount] - Set max bid limit
 /autobid on/off - Auto-bid for all campaigns
 /auto [campaign] on/off - Auto-bid for specific campaign
 
 💡 FEATURES:
-• 24/7 top bid monitoring
-• Campaign progress tracking
-• Bid drop alerts
+• Global top bid tracking
+• Campaign progress monitoring  
+• Bid drop alerts (50+ credits)
 • Auto-bidding for #1 spot
 • GitHub data persistence
 • IST timezone
@@ -623,7 +669,7 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         self.send_telegram(help_msg)
 
     def send_hourly_status(self):
-        """Send automatic hourly status report"""
+        """Automatic hourly status report"""
         if not self.campaigns and not self.bid_history:
             return
             
@@ -639,6 +685,8 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 Traffic: {traffic_credits}
 Visitors: {visitor_credits:,}
 
+🎯 GLOBAL TOP BID: {self.current_global_bid} credits
+
 """
         
         if self.campaigns:
@@ -651,81 +699,102 @@ Visitors: {visitor_credits:,}
         
         if self.bid_history:
             current_bid = self.bid_history[-1]['bid'] if self.bid_history else 0
-            status_msg += f"\n🎯 Current Top Bid: {current_bid} credits"
+            if len(self.bid_history) >= 2:
+                previous_bid = self.bid_history[-2]['bid']
+                change = current_bid - previous_bid
+                change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+                status_msg += f"\n{change_icon} Bid Change: {previous_bid} → {current_bid} ({change:+d} credits)"
         
         status_msg += "\n\n🤖 Bot is actively monitoring..."
         
         self.send_telegram(status_msg)
-        logger.info("Hourly status sent")
+        logger.info("HOURLY_STATUS: Sent automatic report")
 
     def check_and_alert(self):
-        """Main monitoring function"""
+        """Main monitoring function with global bid tracking"""
         if not self.is_monitoring:
             return
         
         if not self.smart_login():
-            logger.error("Cannot check - login failed")
+            logger.error("MONITORING: Cannot check - login failed")
             return
         
-        # Parse campaigns - FIXED
-        new_campaigns = self.parse_campaigns()
+        # Get global top bid
+        global_top_bid = self.get_global_top_bid()
         
-        # Update top bids for each campaign
-        for campaign_name, campaign_data in new_campaigns.items():
-            top_bid = self.get_top_bid(campaign_name)
-            if top_bid > 0:
-                new_campaigns[campaign_name]['top_bid'] = top_bid
-                
-                # Record bid history
-                self.bid_history.append({
-                    'bid': top_bid,
-                    'time': self.get_ist_time(),
-                    'campaign': campaign_name
-                })
-                
-                # Keep only last 100 records
-                if len(self.bid_history) > 100:
-                    self.bid_history = self.bid_history[-100:]
-        
-        # Update campaigns
-        self.campaigns = new_campaigns
-        
-        # Check for bid drops
-        if len(self.bid_history) >= 2:
-            current_bid = self.bid_history[-1]['bid']
-            drop_detected, drop_amount = self.check_bid_drop(current_bid)
-            if drop_detected:
-                current_time = time.time()
-                if current_time - self.last_alert_time > 3600:  # 1 hour cooldown
-                    previous_bid = self.bid_history[-2]['bid']
-                    alert_msg = f"""
+        if global_top_bid > 0:
+            # Record bid history
+            self.bid_history.append({
+                'bid': global_top_bid,
+                'time': self.get_ist_time(),
+                'type': 'global'
+            })
+            
+            # Keep only last 100 records
+            if len(self.bid_history) > 100:
+                self.bid_history = self.bid_history[-100:]
+            
+            # Update global bid
+            self.current_global_bid = global_top_bid
+            
+            # Check for bid drops
+            if len(self.bid_history) >= 2:
+                drop_detected, drop_amount = self.check_bid_drop(global_top_bid)
+                if drop_detected:
+                    current_time = time.time()
+                    if current_time - self.last_alert_time > 3600:  # 1 hour cooldown
+                        previous_bid = self.bid_history[-2]['bid']
+                        alert_msg = f"""
 📉 BID DROP OPPORTUNITY!
 
-Top bid dropped from {previous_bid} → {current_bid} credits
+Global top bid dropped from {previous_bid} → {global_top_bid} credits
 💰 SAVE {drop_amount} CREDITS!
 
 Perfect time to start new campaign!
 """
-                    self.send_telegram(alert_msg)
-                    self.last_alert_time = current_time
-
+                        self.send_telegram(alert_msg)
+                        self.last_alert_time = current_time
+                        logger.info(f"BID_ALERT: Sent drop alert - saved {drop_amount} credits")
+        
+        # Parse campaigns with updated global bid
+        new_campaigns = self.parse_campaigns()
+        
+        # Update campaigns with global top bid
+        for campaign_name in new_campaigns:
+            new_campaigns[campaign_name]['top_bid'] = self.current_global_bid
+        
+        self.campaigns = new_campaigns
+        
+        # Check for campaign completion alerts
+        for campaign_name, campaign_data in self.campaigns.items():
+            if campaign_data.get('completed') and campaign_data.get('completion_pct', 0) >= 99.9:
+                if f"completed_{campaign_name}" not in self.sent_alerts:
+                    self.send_telegram(f"✅ Campaign Completed:\n\"{campaign_name}\" - {campaign_data['progress']} (100%)\n🚨 EXTEND NOW - Bid reset to 0!")
+                    self.sent_alerts[f"completed_{campaign_name}"] = True
+        
         # Auto-save to GitHub every hour
         if time.time() - self.last_save_time > 3600:
             self.save_to_github()
 
     def run(self):
-        logger.info("Starting Smart Bidder with fixed campaign parsing...")
+        logger.info("🚀 Starting Smart Bidder with global bid tracking...")
         
         if not self.force_login():
-            logger.error("Failed to start - login failed")
+            logger.error("❌ Failed to start - login failed")
             return
         
+        # Initialize sent alerts
+        self.sent_alerts = {}
+        
         persistence_status = "with GitHub persistence" if self.github_token else "without persistence"
-        self.send_telegram(f"🤖 SMART BIDDER STARTED!\n• {persistence_status}\n• Fixed campaign parsing\n• IST timezone\nType /help for commands")
+        startup_msg = f"🤖 SMART BIDDER STARTED!\n• {persistence_status}\n• Global bid tracking\n• Enhanced logging\n• IST timezone\nType /help for commands"
+        self.send_telegram(startup_msg)
         
         last_check = 0
         last_command_check = 0
         last_hourly_status = time.time()
+        
+        logger.info("🔄 Entering main monitoring loop...")
         
         while True:
             try:
@@ -738,19 +807,21 @@ Perfect time to start new campaign!
                 
                 # Check bids every 5 minutes if monitoring
                 if self.is_monitoring and current_time - last_check >= self.check_interval:
+                    logger.info("🔍 Performing scheduled bid check...")
                     self.check_and_alert()
                     last_check = current_time
-                    logger.info("Bid check completed")
+                    logger.info("✅ Bid check completed")
                 
                 # Hourly status report
                 if self.is_monitoring and current_time - last_hourly_status >= 3600:
+                    logger.info("🕐 Sending hourly status report...")
                     self.send_hourly_status()
                     last_hourly_status = current_time
                 
                 time.sleep(1)
                 
             except Exception as e:
-                logger.error(f"Main loop error: {e}")
+                logger.error(f"❌ Main loop error: {e}")
                 time.sleep(30)
 
 if __name__ == "__main__":
