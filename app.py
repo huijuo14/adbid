@@ -8,7 +8,6 @@ from datetime import datetime
 import os
 import json
 import pytz
-import base64
 
 # Enhanced logging setup
 logging.basicConfig(
@@ -43,6 +42,8 @@ class SmartBidder:
         self.last_alert_time = 0
         self.last_save_time = 0
         self.current_global_bid = 0
+        self.sent_alerts = {}
+        self.gist_id = None  # Store Gist ID for updates
         
         # Timing
         self.check_interval = 300  # 5 minutes
@@ -54,7 +55,7 @@ class SmartBidder:
         else:
             logger.warning("GitHub token not set - data persistence disabled")
         
-        logger.info("Smart Bidder initialized with global bid tracking")
+        logger.info("Smart Bidder initialized with Gist persistence")
 
     def rotate_user_agent(self):
         user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
@@ -72,9 +73,9 @@ class SmartBidder:
         return dt.strftime("%I:%M %p")
 
     def save_to_github(self):
-        """Save data to GitHub Repository"""
+        """Save data to GitHub Gist"""
         if not self.github_token:
-            logger.warning("GITHUB_SAVE: No token - skipping save")
+            logger.warning("GIST_SAVE: No token - skipping save")
             return False
             
         try:
@@ -84,7 +85,8 @@ class SmartBidder:
                 'max_bid_limit': self.max_bid_limit,
                 'auto_bid_enabled': self.auto_bid_enabled,
                 'current_global_bid': self.current_global_bid,
-                'last_save': datetime.now().isoformat()
+                'last_save': datetime.now().isoformat(),
+                'gist_id': self.gist_id
             }
             
             # Convert datetime objects to strings
@@ -97,54 +99,50 @@ class SmartBidder:
                 if 'last_checked' in campaign and isinstance(campaign['last_checked'], datetime):
                     campaign['last_checked'] = campaign['last_checked'].isoformat()
             
-            # Use Repository API
-            repo_url = "https://api.github.com/repos/ShreyanshShah/bidbot-data/contents/bot_data.json"
+            gist_data = {
+                "description": f"BidBot Data - Last update: {datetime.now().isoformat()}",
+                "public": False,
+                "files": {
+                    "bidbot_data.json": {
+                        "content": json.dumps(data, indent=2)
+                    }
+                }
+            }
             
             headers = {
                 "Authorization": f"token {self.github_token}",
                 "Content-Type": "application/json"
             }
             
-            # Get current file SHA
-            logger.info("GITHUB_SAVE: Getting current file...")
-            response = self.session.get(repo_url, headers=headers)
-            sha = None
-            if response.status_code == 200:
-                sha = response.json().get('sha')
-                logger.info("GITHUB_SAVE: Found existing file, will update")
+            url = "https://api.github.com/gists"
+            
+            # If we have a Gist ID, update existing gist, else create new
+            if self.gist_id:
+                logger.info(f"GIST_SAVE: Updating existing gist {self.gist_id}")
+                url = f"https://api.github.com/gists/{self.gist_id}"
+                response = self.session.patch(url, json=gist_data, headers=headers, timeout=30)
             else:
-                logger.info("GITHUB_SAVE: No existing file, will create new")
-            
-            # Create/update file
-            content = json.dumps(data, indent=2)
-            content_bytes = content.encode('utf-8')
-            content_b64 = base64.b64encode(content_bytes).decode('utf-8')
-            
-            payload = {
-                "message": f"Bot data update {datetime.now().isoformat()}",
-                "content": content_b64,
-                "sha": sha
-            }
-            
-            logger.info("GITHUB_SAVE: Sending data to GitHub...")
-            response = self.session.put(repo_url, json=payload, headers=headers, timeout=30)
+                logger.info("GIST_SAVE: Creating new gist")
+                response = self.session.post(url, json=gist_data, headers=headers, timeout=30)
             
             if response.status_code in [200, 201]:
-                logger.info("GITHUB_SAVE: Data saved successfully")
+                response_data = response.json()
+                self.gist_id = response_data.get('id')
+                logger.info(f"GIST_SAVE: Success - Gist ID: {self.gist_id}")
                 self.last_save_time = time.time()
                 return True
             else:
-                logger.error(f"GITHUB_SAVE: Failed - {response.status_code} - {response.text}")
+                logger.error(f"GIST_SAVE: Failed - {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"GITHUB_SAVE: Error - {e}")
+            logger.error(f"GIST_SAVE: Error - {e}")
             return False
 
     def load_from_github(self):
-        """Load data from GitHub Repository"""
+        """Load data from GitHub Gist"""
         if not self.github_token:
-            logger.warning("GITHUB_LOAD: No token - skipping load")
+            logger.warning("GIST_LOAD: No token - skipping load")
             return False
             
         try:
@@ -153,64 +151,87 @@ class SmartBidder:
                 "Content-Type": "application/json"
             }
             
-            repo_url = "https://api.github.com/repos/ShreyanshShah/bidbot-data/contents/bot_data.json"
-            logger.info("GITHUB_LOAD: Fetching data from GitHub...")
-            response = self.session.get(repo_url, headers=headers, timeout=30)
+            # First, get list of all gists to find our bidbot gist
+            url = "https://api.github.com/gists"
+            logger.info("GIST_LOAD: Searching for existing gists...")
+            response = self.session.get(url, headers=headers, timeout=30)
             
             if response.status_code == 200:
-                content_b64 = response.json().get('content', '')
-                content = base64.b64decode(content_b64).decode('utf-8')
-                data = json.loads(content)
+                gists = response.json()
+                bidbot_gist = None
                 
-                logger.info("GITHUB_LOAD: Data fetched, restoring...")
+                # Find gist with our data file
+                for gist in gists:
+                    if 'bidbot_data.json' in gist.get('files', {}):
+                        bidbot_gist = gist
+                        self.gist_id = gist['id']
+                        logger.info(f"GIST_LOAD: Found existing gist: {self.gist_id}")
+                        break
                 
-                # Restore bid history
-                if 'bid_history' in data:
-                    restored_count = 0
-                    for item in data['bid_history']:
-                        if 'time' in item and isinstance(item['time'], str):
-                            try:
-                                item['time'] = datetime.fromisoformat(item['time'])
-                                restored_count += 1
-                            except:
-                                item['time'] = self.get_ist_time()
-                    self.bid_history = data['bid_history']
-                    logger.info(f"GITHUB_LOAD: Restored {restored_count} bid history records")
-                
-                # Restore campaigns with merging
-                if 'campaigns' in data:
-                    restored_campaigns = 0
-                    for campaign_name, campaign_data in data['campaigns'].items():
-                        if 'last_checked' in campaign_data and isinstance(campaign_data['last_checked'], str):
-                            try:
-                                campaign_data['last_checked'] = datetime.fromisoformat(campaign_data['last_checked'])
-                            except:
-                                campaign_data['last_checked'] = self.get_ist_time()
-                        self.campaigns[campaign_name] = campaign_data
-                        restored_campaigns += 1
-                    logger.info(f"GITHUB_LOAD: Restored {restored_campaigns} campaigns")
-                
-                # Restore settings
-                if 'max_bid_limit' in data:
-                    self.max_bid_limit = data['max_bid_limit']
-                    logger.info(f"GITHUB_LOAD: Restored max bid limit: {self.max_bid_limit}")
-                
-                if 'auto_bid_enabled' in data:
-                    self.auto_bid_enabled = data['auto_bid_enabled']
-                    logger.info(f"GITHUB_LOAD: Restored auto-bid: {self.auto_bid_enabled}")
-                
-                if 'current_global_bid' in data:
-                    self.current_global_bid = data['current_global_bid']
-                    logger.info(f"GITHUB_LOAD: Restored global bid: {self.current_global_bid}")
-                
-                logger.info("GITHUB_LOAD: Data restoration completed")
-                return True
+                if bidbot_gist:
+                    # Get the gist content
+                    gist_url = bidbot_gist['files']['bidbot_data.json']['raw_url']
+                    data_response = self.session.get(gist_url, timeout=30)
+                    
+                    if data_response.status_code == 200:
+                        data = json.loads(data_response.text)
+                        logger.info("GIST_LOAD: Data fetched, restoring...")
+                        
+                        # Restore bid history
+                        if 'bid_history' in data:
+                            restored_count = 0
+                            for item in data['bid_history']:
+                                if 'time' in item and isinstance(item['time'], str):
+                                    try:
+                                        item['time'] = datetime.fromisoformat(item['time'])
+                                        restored_count += 1
+                                    except:
+                                        item['time'] = self.get_ist_time()
+                            self.bid_history = data['bid_history']
+                            logger.info(f"GIST_LOAD: Restored {restored_count} bid history records")
+                        
+                        # Restore campaigns with merging
+                        if 'campaigns' in data:
+                            restored_campaigns = 0
+                            for campaign_name, campaign_data in data['campaigns'].items():
+                                if 'last_checked' in campaign_data and isinstance(campaign_data['last_checked'], str):
+                                    try:
+                                        campaign_data['last_checked'] = datetime.fromisoformat(campaign_data['last_checked'])
+                                    except:
+                                        campaign_data['last_checked'] = self.get_ist_time()
+                                self.campaigns[campaign_name] = campaign_data
+                                restored_campaigns += 1
+                            logger.info(f"GIST_LOAD: Restored {restored_campaigns} campaigns")
+                        
+                        # Restore settings
+                        if 'max_bid_limit' in data:
+                            self.max_bid_limit = data['max_bid_limit']
+                            logger.info(f"GIST_LOAD: Restored max bid limit: {self.max_bid_limit}")
+                        
+                        if 'auto_bid_enabled' in data:
+                            self.auto_bid_enabled = data['auto_bid_enabled']
+                            logger.info(f"GIST_LOAD: Restored auto-bid: {self.auto_bid_enabled}")
+                        
+                        if 'current_global_bid' in data:
+                            self.current_global_bid = data['current_global_bid']
+                            logger.info(f"GIST_LOAD: Restored global bid: {self.current_global_bid}")
+                        
+                        # Restore sent alerts to avoid duplicates
+                        if 'sent_alerts' in data:
+                            self.sent_alerts = data['sent_alerts']
+                            logger.info(f"GIST_LOAD: Restored {len(self.sent_alerts)} alert states")
+                        
+                        logger.info("GIST_LOAD: Data restoration completed")
+                        return True
+                else:
+                    logger.info("GIST_LOAD: No existing bidbot gist found - starting fresh")
+                    return False
             else:
-                logger.info("GITHUB_LOAD: No existing data found - starting fresh")
+                logger.error(f"GIST_LOAD: Failed to fetch gists - {response.status_code}")
                 return False
             
         except Exception as e:
-            logger.error(f"GITHUB_LOAD: Error - {e}")
+            logger.error(f"GIST_LOAD: Error - {e}")
             return False
 
     def human_delay(self, min_seconds=1, max_seconds=3):
@@ -543,7 +564,7 @@ class SmartBidder:
     def start_monitoring(self):
         self.is_monitoring = True
         logger.info("MONITORING: Started")
-        self.send_telegram("🚀 SMART BIDDER ACTIVATED!\n\n24/7 monitoring with global bid tracking!")
+        self.send_telegram("🚀 SMART BIDDER ACTIVATED!\n\n24/7 monitoring with Gist persistence!")
 
     def stop_monitoring(self):
         self.is_monitoring = False
@@ -663,7 +684,7 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 • Campaign progress monitoring  
 • Bid drop alerts (50+ credits)
 • Auto-bidding for #1 spot
-• GitHub data persistence
+• GitHub Gist persistence
 • IST timezone
 """
         self.send_telegram(help_msg)
@@ -768,25 +789,28 @@ Perfect time to start new campaign!
         # Check for campaign completion alerts
         for campaign_name, campaign_data in self.campaigns.items():
             if campaign_data.get('completed') and campaign_data.get('completion_pct', 0) >= 99.9:
-                if f"completed_{campaign_name}" not in self.sent_alerts:
+                alert_key = f"completed_{campaign_name}"
+                if alert_key not in self.sent_alerts:
                     self.send_telegram(f"✅ Campaign Completed:\n\"{campaign_name}\" - {campaign_data['progress']} (100%)\n🚨 EXTEND NOW - Bid reset to 0!")
-                    self.sent_alerts[f"completed_{campaign_name}"] = True
+                    self.sent_alerts[alert_key] = True
+                    logger.info(f"CAMPAIGN_ALERT: Sent completion alert for {campaign_name}")
         
-        # Auto-save to GitHub every hour
+        # Auto-save to GitHub Gist every hour
         if time.time() - self.last_save_time > 3600:
             self.save_to_github()
 
     def run(self):
-        logger.info("🚀 Starting Smart Bidder with global bid tracking...")
+        logger.info("🚀 Starting Smart Bidder with Gist persistence...")
         
         if not self.force_login():
             logger.error("❌ Failed to start - login failed")
             return
         
-        # Initialize sent alerts
-        self.sent_alerts = {}
+        # Initialize sent alerts if not loaded
+        if not hasattr(self, 'sent_alerts'):
+            self.sent_alerts = {}
         
-        persistence_status = "with GitHub persistence" if self.github_token else "without persistence"
+        persistence_status = "with GitHub Gist persistence" if self.github_token else "without persistence"
         startup_msg = f"🤖 SMART BIDDER STARTED!\n• {persistence_status}\n• Global bid tracking\n• Enhanced logging\n• IST timezone\nType /help for commands"
         self.send_telegram(startup_msg)
         
