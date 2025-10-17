@@ -6,6 +6,7 @@ import logging
 import random
 from datetime import datetime
 import os
+import json
 
 # Basic logging setup
 logging.basicConfig(
@@ -31,11 +32,21 @@ class UltimateSmartBidder:
         self.is_monitoring = False
         self.campaigns = {}
         
+        # NEW: Market monitoring
+        self.market_bids = {}  # All bids in market
+        self.bid_history = {}  # Historical bid data
+        self.market_alerts_sent = set()  # Prevent duplicate alerts
+        
         # Configurable settings
         self.minimal_bid_weights = [1, 2]
         self.check_interval = int(os.environ.get('CHECK_INTERVAL', '180'))  # 3 minutes
         self.max_bid_limit = int(os.environ.get('MAX_BID_LIMIT', '369'))
         self.bid_cooldown = 60
+        
+        # NEW: Market monitoring settings
+        self.market_check_interval = int(os.environ.get('MARKET_CHECK_INTERVAL', '300'))  # 5 minutes
+        self.bid_change_threshold = int(os.environ.get('BID_CHANGE_THRESHOLD', '5'))  # Min change to alert
+        self.enable_market_alerts = True
         
         self.visitor_alert_threshold = int(os.environ.get('VISITOR_ALERT_THRESHOLD', '1000'))
         self.visitor_stop_threshold = int(os.environ.get('VISITOR_STOP_THRESHOLD', '500'))
@@ -47,10 +58,14 @@ class UltimateSmartBidder:
         self.last_bid_time = {}
         self.sent_alerts = {}
         
-        logger.info(f"BOT_INITIALIZED - Check interval: {self.check_interval}s, Max bid: {self.max_bid_limit}")
+        logger.info(f"BOT_INITIALIZED - Market monitoring: {self.enable_market_alerts}")
 
     def rotate_user_agent(self):
-        user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        ]
         self.session.headers.update({'User-Agent': random.choice(user_agents)})
 
     def human_delay(self, min_seconds=2, max_seconds=5):
@@ -193,6 +208,150 @@ class UltimateSmartBidder:
             logger.error(f"TELEGRAM_SEND_ERROR - {e}")
             return False
 
+    # NEW: Market Monitoring Functions
+    def scan_market_bids(self):
+        """Scan ALL campaigns in the market and track their bids"""
+        try:
+            logger.info("MARKET_SCAN - Scanning all market bids")
+            adverts_url = "https://adsha.re/adverts"
+            response = self.session.get(adverts_url, timeout=30)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            current_market = {}
+            campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
+            
+            for div in campaign_divs:
+                campaign_name = self.extract_campaign_name(div)
+                if not campaign_name:
+                    continue
+                
+                # Get current bid
+                bid_match = re.search(r'Campaign Bid:\s*(\d+)', div.get_text())
+                current_bid = int(bid_match.group(1)) if bid_match else 0
+                
+                if campaign_name and current_bid > 0:
+                    current_market[campaign_name] = current_bid
+                    
+                    # Initialize bid history
+                    if campaign_name not in self.bid_history:
+                        self.bid_history[campaign_name] = []
+                    
+                    # Record bid with timestamp
+                    self.bid_history[campaign_name].append({
+                        'bid': current_bid,
+                        'timestamp': datetime.now().isoformat(),
+                        'type': 'market_scan'
+                    })
+                    
+                    # Keep only last 50 records
+                    if len(self.bid_history[campaign_name]) > 50:
+                        self.bid_history[campaign_name] = self.bid_history[campaign_name][-50:]
+            
+            # Check for market changes
+            self.analyze_market_changes(current_market)
+            self.market_bids = current_market
+            
+            logger.info(f"MARKET_SCAN_COMPLETE - Found {len(current_market)} campaigns")
+            return current_market
+            
+        except Exception as e:
+            logger.error(f"MARKET_SCAN_ERROR - {e}")
+            return {}
+
+    def extract_campaign_name(self, div_element):
+        """Extract campaign name from div element"""
+        try:
+            campaign_name = ""
+            for element in div_element.contents:
+                if isinstance(element, str) and element.strip():
+                    campaign_name = element.strip()
+                    break
+                elif element.name == 'br':
+                    break
+            
+            if 'http' in campaign_name:
+                campaign_name = campaign_name.split('http')[0].strip()
+            campaign_name = campaign_name.rstrip('.:- ')
+            
+            return campaign_name
+        except Exception as e:
+            logger.error(f"EXTRACT_CAMPAIGN_NAME_ERROR - {e}")
+            return ""
+
+    def analyze_market_changes(self, current_market):
+        """Analyze market changes and send alerts"""
+        if not hasattr(self, 'previous_market_bids'):
+            self.previous_market_bids = current_market
+            return
+        
+        # Check for new campaigns
+        new_campaigns = set(current_market.keys()) - set(self.previous_market_bids.keys())
+        for campaign in new_campaigns:
+            if campaign not in self.market_alerts_sent:
+                self.send_telegram(f"🆕 NEW CAMPAIGN:\n\"{campaign}\"\nStarting bid: {current_market[campaign]} credits")
+                self.market_alerts_sent.add(campaign)
+                logger.info(f"NEW_CAMPAIGN_ALERT - {campaign} | {current_market[campaign]} credits")
+        
+        # Check for removed campaigns
+        removed_campaigns = set(self.previous_market_bids.keys()) - set(current_market.keys())
+        for campaign in removed_campaigns:
+            if f"removed_{campaign}" not in self.market_alerts_sent:
+                self.send_telegram(f"❌ CAMPAIGN ENDED:\n\"{campaign}\"")
+                self.market_alerts_sent.add(f"removed_{campaign}")
+                logger.info(f"CAMPAIGN_ENDED_ALERT - {campaign}")
+        
+        # Check for bid changes
+        for campaign, current_bid in current_market.items():
+            previous_bid = self.previous_market_bids.get(campaign)
+            
+            if previous_bid and previous_bid != current_bid:
+                change = current_bid - previous_bid
+                change_abs = abs(change)
+                
+                # Only alert on significant changes
+                if change_abs >= self.bid_change_threshold:
+                    alert_key = f"bid_change_{campaign}_{current_bid}"
+                    if alert_key not in self.market_alerts_sent:
+                        change_type = "📈 INCREASE" if change > 0 else "📉 DECREASE"
+                        change_emoji = "🚀" if change > 10 else "⬆️" if change > 0 else "⬇️"
+                        
+                        message = f"{change_emoji} MARKET BID {change_type}:\n\"{campaign}\"\n"
+                        message += f"Previous: {previous_bid} → Current: {current_bid} credits\n"
+                        message += f"Change: {change:+d} credits"
+                        
+                        self.send_telegram(message)
+                        self.market_alerts_sent.add(alert_key)
+                        logger.info(f"MARKET_BID_CHANGE - {campaign} | {previous_bid} → {current_bid}")
+        
+        self.previous_market_bids = current_market
+
+    def get_market_analytics(self):
+        """Get market analytics summary"""
+        if not self.market_bids:
+            return "No market data available"
+        
+        total_campaigns = len(self.market_bids)
+        avg_bid = sum(self.market_bids.values()) / total_campaigns
+        min_bid = min(self.market_bids.values())
+        max_bid = max(self.market_bids.values())
+        
+        analytics = f"""
+📊 MARKET ANALYTICS
+
+Total Campaigns: {total_campaigns}
+Average Bid: {avg_bid:.1f} credits
+Bid Range: {min_bid} - {max_bid} credits
+
+Top 5 Highest Bids:
+"""
+        
+        # Top 5 highest bids
+        sorted_bids = sorted(self.market_bids.items(), key=lambda x: x[1], reverse=True)[:5]
+        for i, (campaign, bid) in enumerate(sorted_bids, 1):
+            analytics += f"{i}. {campaign}: {bid} credits\n"
+        
+        return analytics
+
     def process_telegram_command(self):
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
@@ -232,8 +391,43 @@ class UltimateSmartBidder:
             self.handle_auto_command(command)
         elif command_lower == '/help':
             self.send_enhanced_help()
+        elif command_lower == '/market':  # NEW: Market command
+            self.send_market_report()
+        elif command_lower == '/analytics':  # NEW: Analytics command
+            self.send_market_analytics()
         else:
             self.send_telegram("❌ Unknown command. Use /help for available commands")
+
+    def send_market_report(self):
+        """Send current market overview"""
+        if not self.market_bids:
+            self.scan_market_bids()
+        
+        if not self.market_bids:
+            self.send_telegram("📊 No market data available yet. Scanning...")
+            return
+        
+        report = f"""
+🏪 MARKET OVERVIEW
+
+Total Active Campaigns: {len(self.market_bids)}
+Current Market Range: {min(self.market_bids.values())} - {max(self.market_bids.values())} credits
+
+🔝 Top 3 Highest Bids:
+"""
+        
+        sorted_bids = sorted(self.market_bids.items(), key=lambda x: x[1], reverse=True)[:3]
+        for i, (campaign, bid) in enumerate(sorted_bids, 1):
+            report += f"{i}. {campaign}: {bid} credits\n"
+        
+        report += f"\n🔄 Market monitoring: {'✅ ACTIVE' if self.enable_market_alerts else '❌ INACTIVE'}"
+        
+        self.send_telegram(report)
+
+    def send_market_analytics(self):
+        """Send detailed market analytics"""
+        analytics = self.get_market_analytics()
+        self.send_telegram(analytics)
 
     def handle_auto_command(self, command):
         parts = command.split()
@@ -285,20 +479,18 @@ class UltimateSmartBidder:
 
     def start_monitoring(self):
         self.is_monitoring = True
-        logger.info("BOT_STARTED - Monitoring activated")
-        self.send_telegram("🚀 Ultimate Smart Bidder ACTIVATED!\n\nMonitoring all campaigns...")
+        self.enable_market_alerts = True
+        logger.info("BOT_STARTED - Monitoring activated with market scanning")
+        self.send_telegram("🚀 Ultimate Smart Bidder ACTIVATED!\n\nMonitoring all campaigns + market bids...")
         self.send_enhanced_status()
 
     def stop_monitoring(self):
         self.is_monitoring = False
+        self.enable_market_alerts = False
         logger.info("BOT_STOPPED - Monitoring stopped")
         self.send_telegram("🛑 Bot STOPPED!\nUse /start to resume monitoring.")
 
     def send_enhanced_status(self):
-        if not self.campaigns:
-            self.send_telegram("📊 No campaigns loaded. Monitoring adsha.re for campaigns...")
-            return
-        
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
             
@@ -308,24 +500,31 @@ class UltimateSmartBidder:
 💰 CREDITS:
 Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 
-🏆 CAMPAIGN STATUS:
+🏆 YOUR CAMPAIGNS:
 """
         
-        for name, data in self.campaigns.items():
-            is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
-            status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
-            position = "🏆 #1" if is_top else f"📉 #{data.get('position', '2+')}"
-            
-            views_info = ""
-            if 'views' in data:
-                views = data['views']
-                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                views_info = f"\n   📈 Progress: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)"
-            
-            status_msg += f"{position} {name}\n"
-            status_msg += f"   💰 Bid: {data['my_bid']} | Top: {data.get('top_bid', 'N/A')} | {status}{views_info}\n\n"
+        if self.campaigns:
+            for name, data in self.campaigns.items():
+                is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
+                status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
+                position = "🏆 #1" if is_top else f"📉 #{data.get('position', '2+')}"
+                
+                views_info = ""
+                if 'views' in data:
+                    views = data['views']
+                    progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
+                    views_info = f"\n   📈 Progress: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)"
+                
+                status_msg += f"{position} {name}\n"
+                status_msg += f"   💰 Bid: {data['my_bid']} | Top: {data.get('top_bid', 'N/A')} | {status}{views_info}\n\n"
+        else:
+            status_msg += "No active campaigns\n\n"
 
-        status_msg += "🤖 Bot is actively monitoring..."
+        # Add market info
+        if self.market_bids:
+            status_msg += f"🏪 MARKET:\nActive Campaigns: {len(self.market_bids)}\nBid Range: {min(self.market_bids.values())}-{max(self.market_bids.values())} credits\n\n"
+
+        status_msg += "🤖 Bot is actively monitoring market + your campaigns..."
         self.send_telegram(status_msg)
 
     def send_campaigns_list(self):
@@ -378,15 +577,17 @@ Visitor Credits: {visitor_credits:,}
 
     def send_enhanced_help(self):
         help_msg = """
-🤖 ULTIMATE SMART BIDDER - SIMPLIFIED
+🤖 ULTIMATE SMART BIDDER - MARKET EDITION
 
 📋 AVAILABLE COMMANDS:
 
-/start - Start 24/7 monitoring
+/start - Start 24/7 monitoring + market scanning
 /stop - Stop monitoring  
 /status - Enhanced status with analytics
-/campaigns - List all campaigns with details
+/campaigns - List your campaigns with details
 /credits - Credit management overview
+/market - Current market overview 🆕
+/analytics - Detailed market analytics 🆕
 
 ⚙️ AUTO-BID CONTROL:
 /auto all on/off - Toggle all campaigns
@@ -395,12 +596,13 @@ Visitor Credits: {visitor_credits:,}
 🎯 CORE FEATURES:
 • 24/7 campaign monitoring
 • Auto-bidding to maintain #1 position
+• ALWAYS-ON market bid tracking 🆕
+• Bid change alerts (even for campaigns you don't own) 🆕
+• New campaign alerts 🆕
+• Market analytics and trends 🆕
 • Credit protection system
-• Bid change alerts
-• Campaign completion detection
-• Telegram command control
 
-💡 TIP: Use /status for current campaign status!
+💡 TIP: Use /market to see current bid opportunities!
 """
         self.send_telegram(help_msg)
 
@@ -412,18 +614,7 @@ Visitor Credits: {visitor_credits:,}
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
             
             for div in campaign_divs:
-                campaign_name = ""
-                for element in div.contents:
-                    if isinstance(element, str) and element.strip():
-                        campaign_name = element.strip()
-                        break
-                    elif element.name == 'br':
-                        break
-                
-                if 'http' in campaign_name:
-                    campaign_name = campaign_name.split('http')[0].strip()
-                campaign_name = campaign_name.rstrip('.:- ')
-                
+                campaign_name = self.extract_campaign_name(div)
                 if not campaign_name:
                     continue
                 
@@ -502,7 +693,6 @@ Visitor Credits: {visitor_credits:,}
         return new_bid
 
     def check_completion_alerts(self, campaign_name, campaign_data):
-        # Simplified - only alert at 99% completion
         if 'views' not in campaign_data:
             return
             
@@ -614,6 +804,10 @@ Visitor Credits: {visitor_credits:,}
             
             new_campaigns_data = self.parse_campaigns(response.content)
             
+            # NEW: Always scan market bids
+            if self.enable_market_alerts:
+                self.scan_market_bids()
+            
             # Track bid changes even with no campaigns
             if not self.campaigns and new_campaigns_data:
                 logger.info(f"NEW_CAMPAIGNS_DETECTED - Found {len(new_campaigns_data)} campaigns")
@@ -670,7 +864,7 @@ Visitor Credits: {visitor_credits:,}
 
     def send_hourly_status(self):
         """Send automatic hourly status report"""
-        if not self.campaigns:
+        if not self.campaigns and not self.market_bids:
             return
             
         traffic_credits = self.get_traffic_credits()
@@ -683,33 +877,38 @@ Visitor Credits: {visitor_credits:,}
 Traffic: {traffic_credits}
 Visitors: {visitor_credits:,}
 
-📊 CAMPAIGNS:
 """
         
-        for name, data in self.campaigns.items():
-            if 'views' in data:
-                views = data['views']
-                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                position = "🏆 #1" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
-                status_msg += f"{position} \"{name}\" - {views['current']:,}/{views['total']:,} views ({progress_pct:.1f}%)\n"
+        if self.campaigns:
+            status_msg += "📊 YOUR CAMPAIGNS:\n"
+            for name, data in self.campaigns.items():
+                if 'views' in data:
+                    views = data['views']
+                    progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
+                    position = "🏆 #1" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
+                    status_msg += f"{position} \"{name}\" - {views['current']:,}/{views['total']:,} views ({progress_pct:.1f}%)\n"
         
-        status_msg += "\n🤖 Bot is actively monitoring..."
+        if self.market_bids:
+            status_msg += f"\n🏪 MARKET:\nActive Campaigns: {len(self.market_bids)}\nBid Range: {min(self.market_bids.values())}-{max(self.market_bids.values())} credits\n"
+        
+        status_msg += "\n🤖 Bot is actively monitoring market + your campaigns..."
         
         self.send_telegram(status_msg)
         logger.info("HOURLY_STATUS_SENT - Automatic report delivered")
 
     def run(self):
-        logger.info("BOT_INITIALIZING - Starting Ultimate Smart Bidder...")
+        logger.info("BOT_INITIALIZING - Starting Ultimate Smart Bidder with Market Monitoring...")
         
         if not self.force_login():
             logger.error("BOT_START_FAILED - Initial login failed")
             return
         
-        self.send_telegram("🚀 Ultimate Smart Bidder ACTIVATED!\nType /help for commands")
-        logger.info("BOT_STARTED - 24/7 monitoring activated")
+        self.send_telegram("🚀 Ultimate Smart Bidder ACTIVATED!\nNow with 24/7 MARKET MONITORING! 📈\nType /help for commands")
+        logger.info("BOT_STARTED - 24/7 monitoring + market scanning activated")
         
         last_command_check = 0
         last_campaign_check = 0
+        last_market_check = 0
         last_hourly_status = time.time()
         last_health_check = time.time()
         
@@ -721,6 +920,11 @@ Visitors: {visitor_credits:,}
                 if current_time - last_command_check >= 3:
                     self.process_telegram_command()
                     last_command_check = current_time
+                
+                # Market scanning (every 5 minutes)
+                if self.enable_market_alerts and current_time - last_market_check >= self.market_check_interval:
+                    self.scan_market_bids()
+                    last_market_check = current_time
                 
                 # Hourly status report (every 60 minutes)
                 if current_time - last_hourly_status >= 3600:
