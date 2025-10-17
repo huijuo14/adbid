@@ -24,7 +24,7 @@ class SmartBidder:
         self.chat_id = os.environ.get('CHAT_ID', "2052085789")
         self.email = os.environ.get('EMAIL', "loginallapps@gmail.com")
         self.password = os.environ.get('PASSWORD', "@Sd2007123")
-        self.github_token = os.environ.get('GITHUB_TOKEN')  # NO DEFAULT - USE RAILWAY ENV
+        self.github_token = os.environ.get('GITHUB_TOKEN')
         self.last_update_id = 0
         
         self.session = requests.Session()
@@ -70,9 +70,8 @@ class SmartBidder:
         return dt.strftime("%I:%M %p")
 
     def save_to_github(self):
-        """Save data to GitHub Gist"""
+        """Save data to GitHub Repository"""
         if not self.github_token:
-            logger.warning("GitHub token not set - skipping save")
             return False
             
         try:
@@ -89,38 +88,54 @@ class SmartBidder:
                 if 'time' in item and isinstance(item['time'], datetime):
                     item['time'] = item['time'].isoformat()
             
-            gist_data = {
-                "files": {
-                    "bidbot_data.json": {
-                        "content": json.dumps(data, indent=2)
-                    }
-                }
-            }
+            # Convert campaign datetime objects
+            for campaign in data['campaigns'].values():
+                if 'last_checked' in campaign and isinstance(campaign['last_checked'], datetime):
+                    campaign['last_checked'] = campaign['last_checked'].isoformat()
+            
+            # Use Repository API
+            repo_url = "https://api.github.com/repos/ShreyanshShah/bidbot-data/contents/bot_data.json"
             
             headers = {
                 "Authorization": f"token {self.github_token}",
                 "Content-Type": "application/json"
             }
             
-            url = "https://api.github.com/gists"
-            response = self.session.post(url, json=gist_data, headers=headers, timeout=30)
+            # Get current file SHA
+            response = self.session.get(repo_url, headers=headers)
+            sha = None
+            if response.status_code == 200:
+                sha = response.json().get('sha')
+            
+            # Create/update file
+            import base64
+            content = json.dumps(data, indent=2)
+            content_bytes = content.encode('utf-8')
+            content_b64 = base64.b64encode(content_bytes).decode('utf-8')
+            
+            payload = {
+                "message": f"Bot data update {datetime.now().isoformat()}",
+                "content": content_b64,
+                "sha": sha
+            }
+            
+            response = self.session.put(repo_url, json=payload, headers=headers, timeout=30)
             
             if response.status_code in [200, 201]:
-                logger.info("Data saved to GitHub")
+                logger.info("Data saved to GitHub Repository")
                 self.last_save_time = time.time()
                 return True
             else:
-                logger.error(f"GitHub save failed: {response.status_code}")
+                logger.error(f"GitHub repo save failed: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"GitHub save error: {e}")
+            logger.error(f"GitHub repo save error: {e}")
             return False
 
     def load_from_github(self):
-        """Load data from GitHub Gist"""
+        """Load data from GitHub Repository"""
         if not self.github_token:
-            logger.warning("GitHub token not set - skipping load")
             return False
             
         try:
@@ -129,55 +144,50 @@ class SmartBidder:
                 "Content-Type": "application/json"
             }
             
-            url = "https://api.github.com/gists"
-            response = self.session.get(url, headers=headers, timeout=30)
+            repo_url = "https://api.github.com/repos/ShreyanshShah/bidbot-data/contents/bot_data.json"
+            response = self.session.get(repo_url, headers=headers, timeout=30)
             
             if response.status_code == 200:
-                gists = response.json()
-                for gist in gists:
-                    if 'bidbot_data.json' in gist['files']:
-                        gist_url = gist['files']['bidbot_data.json']['raw_url']
-                        data_response = self.session.get(gist_url, timeout=30)
-                        
-                        if data_response.status_code == 200:
-                            data = json.loads(data_response.text)
-                            
-                            # Restore bid history
-                            if 'bid_history' in data:
-                                for item in data['bid_history']:
-                                    if 'time' in item and isinstance(item['time'], str):
-                                        try:
-                                            item['time'] = datetime.fromisoformat(item['time'])
-                                        except:
-                                            item['time'] = self.get_ist_time()
-                                self.bid_history = data['bid_history']
-                            
-                            # Restore campaigns
-                            if 'campaigns' in data:
-                                self.campaigns = data['campaigns']
-                            
-                            # Restore settings
-                            if 'max_bid_limit' in data:
-                                self.max_bid_limit = data['max_bid_limit']
-                            if 'auto_bid_enabled' in data:
-                                self.auto_bid_enabled = data['auto_bid_enabled']
-                            
-                            logger.info("Data loaded from GitHub")
-                            return True
-            
-            logger.info("No existing data found on GitHub")
-            return False
+                import base64
+                content_b64 = response.json().get('content', '')
+                content = base64.b64decode(content_b64).decode('utf-8')
+                data = json.loads(content)
+                
+                # Restore bid history
+                if 'bid_history' in data:
+                    for item in data['bid_history']:
+                        if 'time' in item and isinstance(item['time'], str):
+                            try:
+                                item['time'] = datetime.fromisoformat(item['time'])
+                            except:
+                                item['time'] = self.get_ist_time()
+                    self.bid_history = data['bid_history']
+                
+                # Restore campaigns
+                if 'campaigns' in data:
+                    for campaign_name, campaign_data in data['campaigns'].items():
+                        if 'last_checked' in campaign_data and isinstance(campaign_data['last_checked'], str):
+                            try:
+                                campaign_data['last_checked'] = datetime.fromisoformat(campaign_data['last_checked'])
+                            except:
+                                campaign_data['last_checked'] = self.get_ist_time()
+                    self.campaigns = data['campaigns']
+                
+                # Restore settings
+                if 'max_bid_limit' in data:
+                    self.max_bid_limit = data['max_bid_limit']
+                if 'auto_bid_enabled' in data:
+                    self.auto_bid_enabled = data['auto_bid_enabled']
+                
+                logger.info("Data loaded from GitHub")
+                return True
+            else:
+                logger.info("No existing data found on GitHub")
+                return False
             
         except Exception as e:
             logger.error(f"GitHub load error: {e}")
             return False
-
-    # ... (REST OF THE METHODS STAY EXACTLY THE SAME AS BEFORE)
-    # human_delay, force_login, check_session_valid, smart_login, parse_campaigns, 
-    # get_top_bid, get_visitor_credits, get_traffic_credits, send_telegram, 
-    # check_bid_drop, process_telegram_command, handle_command, handle_auto_command,
-    # start_monitoring, stop_monitoring, send_enhanced_status, send_campaigns_list,
-    # send_bid_history, set_max_bid, send_help, send_hourly_status, check_and_alert, run
 
     def human_delay(self, min_seconds=1, max_seconds=3):
         time.sleep(random.uniform(min_seconds, max_seconds))
@@ -249,7 +259,7 @@ class SmartBidder:
         return self.force_login()
 
     def parse_campaigns(self):
-        """Parse all campaigns from adverts page"""
+        """FIXED: Parse all campaigns from adverts page"""
         try:
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
@@ -258,12 +268,14 @@ class SmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             campaigns = {}
             
-            # Find campaign divs
-            campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*#8CC63F'))
+            # Find ALL campaign divs (both active and completed)
+            campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*'))
+            
+            logger.info(f"Found {len(campaign_divs)} campaign divs")
             
             for div in campaign_divs:
                 try:
-                    # Extract campaign name (first line before URL)
+                    # Extract campaign name - get first text content
                     campaign_name = ""
                     for element in div.contents:
                         if isinstance(element, str) and element.strip():
@@ -272,6 +284,7 @@ class SmartBidder:
                         elif element.name == 'br':
                             break
                     
+                    # Clean up campaign name
                     if 'http' in campaign_name:
                         campaign_name = campaign_name.split('http')[0].strip()
                     campaign_name = campaign_name.rstrip('.:- ')
@@ -281,36 +294,46 @@ class SmartBidder:
                     
                     text_content = div.get_text()
                     
-                    # Extract your bid
+                    # Extract your bid - FIXED regex
                     bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                     your_bid = int(bid_match.group(1)) if bid_match else 0
                     
-                    # Extract progress
-                    progress_match = re.search(r'(\d+)\s*/\s*(\d+)\s*visitors', text_content)
-                    current_views = int(progress_match.group(1)) if progress_match else 0
-                    total_views = int(progress_match.group(2)) if progress_match else 0
+                    # Extract progress - FIXED regex
+                    progress_match = re.search(r'(\d+,?\d*)\s*/\s*(\d+,?\d*)\s*visitors', text_content.replace(',', ''))
+                    if progress_match:
+                        current_views = int(progress_match.group(1).replace(',', ''))
+                        total_views = int(progress_match.group(2).replace(',', ''))
+                    else:
+                        current_views = 0
+                        total_views = 0
                     
-                    # Check if completed
+                    # Check status
                     completed = "COMPLETE" in text_content
+                    active = "ACTIVE" in text_content
                     
-                    if campaign_name and your_bid > 0:
+                    if campaign_name:
                         # Get auto-bid setting from saved data
                         auto_bid = self.campaigns.get(campaign_name, {}).get('auto_bid', False)
                         
                         campaigns[campaign_name] = {
                             'your_bid': your_bid,
-                            'top_bid': your_bid,  # Will be updated later
+                            'top_bid': your_bid,  # Will be updated with real top bid
                             'auto_bid': auto_bid,
                             'progress': f"{current_views:,}/{total_views:,}",
                             'completion_pct': (current_views / total_views * 100) if total_views > 0 else 0,
                             'completed': completed,
+                            'active': active,
+                            'status': 'COMPLETED' if completed else 'ACTIVE' if active else 'UNKNOWN',
                             'last_checked': self.get_ist_time()
                         }
+                        
+                        logger.info(f"Parsed campaign: {campaign_name} - Bid: {your_bid} - Progress: {current_views}/{total_views} - Status: {campaigns[campaign_name]['status']}")
                         
                 except Exception as e:
                     logger.error(f"Error parsing campaign: {e}")
                     continue
             
+            logger.info(f"Successfully parsed {len(campaigns)} campaigns")
             return campaigns
             
         except Exception as e:
@@ -328,7 +351,7 @@ class SmartBidder:
             assign_links = soup.find_all('a', href=re.compile(r'/adverts/assign/'))
             
             for link in assign_links:
-                campaign_div = link.find_parent('div', style=re.compile(r'border.*solid.*#8CC63F'))
+                campaign_div = link.find_parent('div')
                 if campaign_div and campaign_name in campaign_div.get_text():
                     bid_url = link['href']
                     if not bid_url.startswith('http'):
@@ -342,7 +365,9 @@ class SmartBidder:
                     
                     top_bid_match = re.search(r'top bid is (\d+) credits', page_text)
                     if top_bid_match:
-                        return int(top_bid_match.group(1))
+                        top_bid = int(top_bid_match.group(1))
+                        logger.info(f"Top bid for {campaign_name}: {top_bid}")
+                        return top_bid
             
             return 0
         except Exception as e:
@@ -491,6 +516,7 @@ class SmartBidder:
         self.send_telegram("🛑 Monitoring STOPPED")
 
     def send_enhanced_status(self):
+        """FIXED: Show all campaigns with proper formatting"""
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
         current_time = self.format_ist_time()
@@ -508,23 +534,24 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
             for name, data in self.campaigns.items():
                 is_top = data.get('your_bid', 0) >= data.get('top_bid', 0)
                 status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
-                position = "🏆 #1" if is_top else f"📉 #{data.get('position', '2+')}"
+                position = "🏆 #1" if is_top else "📉 #2+"
                 
-                progress_info = ""
-                if 'progress' in data:
-                    progress_info = f"\n   📈 Progress: {data['progress']} ({data.get('completion_pct', 0):.1f}%)"
+                # Add completion status
+                status_icon = "✅" if data.get('completed') else "🟢" if data.get('active') else "⚪"
                 
-                status_msg += f"{position} {name}\n"
-                status_msg += f"   💰 Bid: {data['your_bid']} | Top: {data.get('top_bid', 'N/A')} | {status}{progress_info}\n\n"
+                status_msg += f"{position} {status_icon} {name}\n"
+                status_msg += f"   💰 Your Bid: {data['your_bid']} | Top Bid: {data.get('top_bid', 'N/A')} | {status}\n"
+                status_msg += f"   📈 Progress: {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n\n"
         else:
-            status_msg += "No active campaigns\n\n"
+            status_msg += "No campaigns detected yet. Checking adverts page...\n\n"
 
         status_msg += f"🕒 {current_time} IST | 🤖 Bot is actively monitoring..."
         self.send_telegram(status_msg)
 
     def send_campaigns_list(self):
+        """FIXED: Show detailed campaign list"""
         if not self.campaigns:
-            self.send_telegram("📊 No campaigns found yet. Monitoring in progress...")
+            self.send_telegram("📊 No campaigns found yet. The bot is checking adverts page...")
             return
         
         campaigns_text = "📋 YOUR CAMPAIGNS\n\n"
@@ -532,14 +559,12 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         for name, data in self.campaigns.items():
             auto_status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
             position = "🏆 #1" if data.get('your_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
+            status_icon = "✅ COMPLETED" if data.get('completed') else "🟢 ACTIVE" if data.get('active') else "⚪ UNKNOWN"
             
             campaigns_text += f"{position} <b>{name}</b>\n"
             campaigns_text += f"   💰 Your Bid: {data['your_bid']} | Top Bid: {data.get('top_bid', 'N/A')} | {auto_status}\n"
-            
-            if 'progress' in data:
-                campaigns_text += f"   📈 Progress: {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n"
-            
-            campaigns_text += "\n"
+            campaigns_text += f"   📈 Progress: {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n"
+            campaigns_text += f"   📊 Status: {status_icon}\n\n"
         
         campaigns_text += "💡 Use /auto [campaign] on/off to control auto-bidding"
         self.send_telegram(campaigns_text)
@@ -556,7 +581,8 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
                 time_str = self.format_ist_time(record['time'])
             else:
                 time_str = "Unknown"
-            history_msg += f"🕒 {time_str} - {record['bid']} credits\n"
+            campaign = record.get('campaign', 'General')
+            history_msg += f"🕒 {time_str} - {record['bid']} credits ({campaign})\n"
         
         self.send_telegram(history_msg)
 
@@ -620,7 +646,8 @@ Visitors: {visitor_credits:,}
             for name, data in self.campaigns.items():
                 if 'progress' in data:
                     position = "🏆 #1" if data.get('your_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
-                    status_msg += f"{position} \"{name}\" - {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n"
+                    status_icon = "✅" if data.get('completed') else "🟢"
+                    status_msg += f"{position} {status_icon} \"{name}\" - {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n"
         
         if self.bid_history:
             current_bid = self.bid_history[-1]['bid'] if self.bid_history else 0
@@ -632,6 +659,7 @@ Visitors: {visitor_credits:,}
         logger.info("Hourly status sent")
 
     def check_and_alert(self):
+        """Main monitoring function"""
         if not self.is_monitoring:
             return
         
@@ -639,11 +667,11 @@ Visitors: {visitor_credits:,}
             logger.error("Cannot check - login failed")
             return
         
-        # Parse campaigns
+        # Parse campaigns - FIXED
         new_campaigns = self.parse_campaigns()
         
         # Update top bids for each campaign
-        for campaign_name in new_campaigns:
+        for campaign_name, campaign_data in new_campaigns.items():
             top_bid = self.get_top_bid(campaign_name)
             if top_bid > 0:
                 new_campaigns[campaign_name]['top_bid'] = top_bid
@@ -686,14 +714,14 @@ Perfect time to start new campaign!
             self.save_to_github()
 
     def run(self):
-        logger.info("Starting Smart Bidder with GitHub persistence...")
+        logger.info("Starting Smart Bidder with fixed campaign parsing...")
         
         if not self.force_login():
             logger.error("Failed to start - login failed")
             return
         
         persistence_status = "with GitHub persistence" if self.github_token else "without persistence"
-        self.send_telegram(f"🤖 SMART BIDDER STARTED!\n• {persistence_status}\n• IST timezone\n• Campaign tracking\nType /help for commands")
+        self.send_telegram(f"🤖 SMART BIDDER STARTED!\n• {persistence_status}\n• Fixed campaign parsing\n• IST timezone\nType /help for commands")
         
         last_check = 0
         last_command_check = 0
