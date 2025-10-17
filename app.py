@@ -9,7 +9,7 @@ import os
 import json
 import pytz
 
-# Enhanced logging setup for Railway
+# Enhanced logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s',
@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-class SmartBidder:
+class UltimateBidder:
     def __init__(self):
         # Environment variables
         self.bot_token = os.environ.get('BOT_TOKEN', "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc")
@@ -36,10 +36,27 @@ class SmartBidder:
         self.auto_bid_enabled = False
         self.max_bid_limit = 100
         
-        # Data storage
+        # Data storage - BOMB PREDICTOR EDITION
         self.bid_history = []
         self.campaigns = {}
-        self.campaign_progress_history = {}  # For predictions
+        self.campaign_progress_history = {}
+        self.completed_campaigns = {}
+        self.learning_data = {
+            'position_speeds': {
+                'top_speed_samples': [],
+                'not_top_speed_samples': [],
+                'top_speed_avg': 0,
+                'not_top_speed_avg': 0,
+                'confidence_score': 0.0
+            },
+            'burst_patterns': {},  # NEW: 12-hour cycle tracking
+            'time_patterns': {
+                'hourly_speeds': {},
+                'daily_speeds': {}
+            },
+            'campaign_profiles': {},
+            'prediction_accuracy': []
+        }
         self.last_alert_time = 0
         self.last_save_time = 0
         self.current_global_bid = 0
@@ -56,89 +73,80 @@ class SmartBidder:
         else:
             logger.warning("GIST: No token - persistence disabled")
         
-        logger.info("🚀 SMART_BIDDER: Initialized with hybrid prediction engine")
+        logger.info("💣 ULTIMATE BOMB PREDICTOR: Initialized!")
 
     def rotate_user_agent(self):
         user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'
         ]
         self.session.headers.update({'User-Agent': random.choice(user_agents)})
 
     def get_ist_time(self):
-        """Get current time in IST"""
         ist = pytz.timezone('Asia/Kolkata')
         return datetime.now(ist)
 
     def format_ist_time(self, dt=None):
-        """Format time in 2:11 PM format"""
         if dt is None:
             dt = self.get_ist_time()
         return dt.strftime("%I:%M %p")
 
     def save_to_github(self):
-        """Save data to GitHub Gist"""
+        """Save ALL data to GitHub Gist"""
         if not self.github_token:
-            logger.warning("GIST_SAVE: No token - skipping")
             return False
             
         try:
             data = {
                 'bid_history': self.bid_history,
                 'campaigns': self.campaigns,
+                'completed_campaigns': self.completed_campaigns,
                 'campaign_progress_history': self.serialize_progress_history(),
+                'learning_data': self.learning_data,  # ALL learning data
                 'max_bid_limit': self.max_bid_limit,
                 'auto_bid_enabled': self.auto_bid_enabled,
                 'current_global_bid': self.current_global_bid,
+                'sent_alerts': self.sent_alerts,
                 'last_save': datetime.now().isoformat(),
                 'gist_id': self.gist_id
             }
             
-            # Convert datetime objects to strings
+            # Convert datetime objects
             for item in data['bid_history']:
                 if 'time' in item and isinstance(item['time'], datetime):
                     item['time'] = item['time'].isoformat()
             
             gist_data = {
-                "description": f"BidBot Data - Last update: {datetime.now().isoformat()}",
+                "description": f"💣 BOMB PREDICTOR - {datetime.now().isoformat()}",
                 "public": False,
                 "files": {
-                    "bidbot_data.json": {
+                    "bomb_predictor.json": {
                         "content": json.dumps(data, indent=2)
                     }
                 }
             }
             
-            headers = {
-                "Authorization": f"token {self.github_token}",
-                "Content-Type": "application/json"
-            }
-            
+            headers = {"Authorization": f"token {self.github_token}"}
             url = "https://api.github.com/gists"
+            
             if self.gist_id:
-                logger.info(f"GIST_SAVE: Updating gist {self.gist_id}")
                 url = f"https://api.github.com/gists/{self.gist_id}"
                 response = self.session.patch(url, json=gist_data, headers=headers, timeout=30)
             else:
-                logger.info("GIST_SAVE: Creating new gist")
                 response = self.session.post(url, json=gist_data, headers=headers, timeout=30)
             
             if response.status_code in [200, 201]:
-                response_data = response.json()
-                self.gist_id = response_data.get('id')
-                logger.info(f"GIST_SAVE: Success - Gist ID: {self.gist_id}")
+                self.gist_id = response.json().get('id')
                 self.last_save_time = time.time()
+                logger.info("💾 GIST_SAVE: All bomb predictor data saved!")
                 return True
-            else:
-                logger.error(f"GIST_SAVE: Failed - {response.status_code}")
-                return False
+            return False
                 
         except Exception as e:
             logger.error(f"GIST_SAVE: Error - {e}")
             return False
 
     def serialize_progress_history(self):
-        """Convert progress history to serializable format"""
         serialized = {}
         for campaign, history in self.campaign_progress_history.items():
             serialized[campaign] = []
@@ -150,92 +158,58 @@ class SmartBidder:
         return serialized
 
     def load_from_github(self):
-        """Load data from GitHub Gist"""
         if not self.github_token:
-            logger.warning("GIST_LOAD: No token - skipping")
             return False
             
         try:
-            headers = {
-                "Authorization": f"token {self.github_token}",
-                "Content-Type": "application/json"
-            }
-            
+            headers = {"Authorization": f"token {self.github_token}"}
             url = "https://api.github.com/gists"
-            logger.info("GIST_LOAD: Searching for gists...")
             response = self.session.get(url, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 gists = response.json()
-                bidbot_gist = None
-                
                 for gist in gists:
-                    if 'bidbot_data.json' in gist.get('files', {}):
-                        bidbot_gist = gist
+                    if 'bomb_predictor.json' in gist.get('files', {}):
                         self.gist_id = gist['id']
-                        logger.info(f"GIST_LOAD: Found gist: {self.gist_id}")
-                        break
-                
-                if bidbot_gist:
-                    gist_url = bidbot_gist['files']['bidbot_data.json']['raw_url']
-                    data_response = self.session.get(gist_url, timeout=30)
-                    
-                    if data_response.status_code == 200:
-                        data = json.loads(data_response.text)
-                        logger.info("GIST_LOAD: Data fetched, restoring...")
+                        gist_url = gist['files']['bomb_predictor.json']['raw_url']
+                        data_response = self.session.get(gist_url, timeout=30)
                         
-                        # Restore bid history
-                        if 'bid_history' in data:
-                            restored_count = 0
-                            for item in data['bid_history']:
-                                if 'time' in item and isinstance(item['time'], str):
-                                    try:
-                                        item['time'] = datetime.fromisoformat(item['time'])
-                                        restored_count += 1
-                                    except:
-                                        item['time'] = self.get_ist_time()
-                            self.bid_history = data['bid_history']
-                            logger.info(f"GIST_LOAD: Restored {restored_count} bid records")
-                        
-                        # Restore campaigns
-                        if 'campaigns' in data:
-                            restored_campaigns = 0
-                            for campaign_name, campaign_data in data['campaigns'].items():
-                                self.campaigns[campaign_name] = campaign_data
-                                restored_campaigns += 1
-                            logger.info(f"GIST_LOAD: Restored {restored_campaigns} campaigns")
-                        
-                        # Restore progress history
-                        if 'campaign_progress_history' in data:
-                            restored_history = 0
-                            for campaign, history in data['campaign_progress_history'].items():
-                                self.campaign_progress_history[campaign] = []
-                                for entry in history:
-                                    if 'timestamp' in entry and isinstance(entry['timestamp'], str):
+                        if data_response.status_code == 200:
+                            data = json.loads(data_response.text)
+                            logger.info("💾 GIST_LOAD: Restoring bomb predictor data...")
+                            
+                            # Restore ALL data structures
+                            if 'bid_history' in data:
+                                for item in data['bid_history']:
+                                    if 'time' in item and isinstance(item['time'], str):
                                         try:
-                                            entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+                                            item['time'] = datetime.fromisoformat(item['time'])
                                         except:
-                                            entry['timestamp'] = self.get_ist_time()
-                                    self.campaign_progress_history[campaign].append(entry)
-                                    restored_history += 1
-                            logger.info(f"GIST_LOAD: Restored {restored_history} progress records")
-                        
-                        # Restore settings
-                        if 'max_bid_limit' in data:
-                            self.max_bid_limit = data['max_bid_limit']
-                        if 'auto_bid_enabled' in data:
-                            self.auto_bid_enabled = data['auto_bid_enabled']
-                        if 'current_global_bid' in data:
-                            self.current_global_bid = data['current_global_bid']
-                        
-                        logger.info("GIST_LOAD: Data restoration completed")
-                        return True
-                else:
-                    logger.info("GIST_LOAD: No existing gist found - fresh start")
-                    return False
-            else:
-                logger.error(f"GIST_LOAD: Failed to fetch gists - {response.status_code}")
+                                            item['time'] = self.get_ist_time()
+                                self.bid_history = data['bid_history']
+                            
+                            self.campaigns = data.get('campaigns', {})
+                            self.completed_campaigns = data.get('completed_campaigns', {})
+                            self.learning_data = data.get('learning_data', self.learning_data)
+                            self.sent_alerts = data.get('sent_alerts', {})
+                            
+                            # Restore progress history
+                            if 'campaign_progress_history' in data:
+                                for campaign, history in data['campaign_progress_history'].items():
+                                    self.campaign_progress_history[campaign] = []
+                                    for entry in history:
+                                        if 'timestamp' in entry and isinstance(entry['timestamp'], str):
+                                            try:
+                                                entry['timestamp'] = datetime.fromisoformat(entry['timestamp'])
+                                            except:
+                                                entry['timestamp'] = self.get_ist_time()
+                                        self.campaign_progress_history[campaign].append(entry)
+                            
+                            logger.info("💾 GIST_LOAD: Bomb predictor data restored!")
+                            return True
+                logger.info("💾 GIST_LOAD: No existing bomb predictor data found")
                 return False
+            return False
             
         except Exception as e:
             logger.error(f"GIST_LOAD: Error - {e}")
@@ -246,7 +220,7 @@ class SmartBidder:
 
     def force_login(self):
         try:
-            logger.info("LOGIN: Attempting login...")
+            logger.info("LOGIN: Attempting...")
             login_url = "https://adsha.re/login"
             response = self.session.get(login_url, timeout=30)
             self.human_delay()
@@ -254,7 +228,6 @@ class SmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             form = soup.find('form', {'name': 'login'})
             if not form:
-                logger.error("LOGIN: Login form not found")
                 return False
                 
             action_path = form.get('action', '')
@@ -269,25 +242,17 @@ class SmartBidder:
                     break
             
             if not password_field:
-                logger.error("LOGIN: Password field not found")
                 return False
             
-            login_data = {
-                'mail': self.email,
-                password_field: self.password
-            }
-            
+            login_data = {'mail': self.email, password_field: self.password}
             response = self.session.post(post_url, data=login_data, allow_redirects=True)
             self.human_delay()
             
-            # Check if login successful
             response = self.session.get("https://adsha.re/adverts", timeout=10, allow_redirects=False)
             if response.status_code == 200 and "Create New Campaign" in response.text:
                 self.session_valid = True
                 logger.info("LOGIN: Successful")
                 return True
-            
-            logger.error("LOGIN: Failed - invalid credentials")
             return False
         except Exception as e:
             logger.error(f"LOGIN: Error - {e}")
@@ -307,85 +272,130 @@ class SmartBidder:
 
     def smart_login(self):
         if self.check_session_valid():
-            logger.info("SESSION: Valid session detected")
             return True
-        logger.warning("SESSION: Session expired, re-login required")
         return self.force_login()
 
-    def update_progress_history(self, campaign_name, current_views, total_views):
-        """Update progress history for predictions"""
+    def detect_burst_pattern(self, campaign_name, current_views, current_time):
+        """Detect and learn 12-hour burst patterns"""
         try:
             if campaign_name not in self.campaign_progress_history:
-                self.campaign_progress_history[campaign_name] = []
+                return
             
-            current_time = self.get_ist_time()
-            new_entry = {
-                'timestamp': current_time,
-                'current_views': current_views,
-                'total_views': total_views,
-                'completion_pct': (current_views / total_views * 100) if total_views > 0 else 0
-            }
+            history = self.campaign_progress_history[campaign_name]
+            if len(history) < 3:
+                return
             
-            # Add new entry
-            self.campaign_progress_history[campaign_name].append(new_entry)
+            # Calculate recent speed (last 10 minutes)
+            recent_views = 0
+            recent_minutes = 10
+            cutoff_time = current_time - timedelta(minutes=recent_minutes)
             
-            # Keep only last 12 entries (1 hour of data at 5-min intervals)
-            if len(self.campaign_progress_history[campaign_name]) > 12:
-                self.campaign_progress_history[campaign_name] = self.campaign_progress_history[campaign_name][-12:]
+            for entry in reversed(history):
+                if entry['timestamp'] >= cutoff_time:
+                    if len(history) > 1 and history[-2]['timestamp'] >= cutoff_time:
+                        recent_views += entry['current_views'] - history[-2]['current_views']
+                else:
+                    break
             
-            logger.info(f"📊 PROGRESS_HISTORY: Updated '{campaign_name}' - {current_views}/{total_views} views")
+            recent_speed = recent_views / recent_minutes  # views per minute
+            
+            # Detect burst (unusually high speed)
+            normal_speed = self.learning_data['position_speeds'].get('top_speed_avg', 1.0) if self.campaigns.get(campaign_name, {}).get('is_top_position') else self.learning_data['position_speeds'].get('not_top_speed_avg', 0.5)
+            
+            if recent_speed > normal_speed * 3:  # 3x normal speed = BURST!
+                logger.info(f"🚀 BURST_DETECTED: {campaign_name} - {recent_speed:.1f} views/min (normal: {normal_speed:.1f})")
+                
+                # Initialize burst pattern if not exists
+                if campaign_name not in self.learning_data['burst_patterns']:
+                    self.learning_data['burst_patterns'][campaign_name] = {
+                        'burst_times': [],
+                        'burst_sizes': [],
+                        'first_detection': current_time
+                    }
+                
+                # Record this burst
+                self.learning_data['burst_patterns'][campaign_name]['burst_times'].append(current_time)
+                self.learning_data['burst_patterns'][campaign_name]['burst_sizes'].append(recent_views)
+                
+                # Keep only last 10 bursts
+                if len(self.learning_data['burst_patterns'][campaign_name]['burst_times']) > 10:
+                    self.learning_data['burst_patterns'][campaign_name]['burst_times'] = self.learning_data['burst_patterns'][campaign_name]['burst_times'][-10:]
+                    self.learning_data['burst_patterns'][campaign_name]['burst_sizes'] = self.learning_data['burst_patterns'][campaign_name]['burst_sizes'][-10:]
+                
+        except Exception as e:
+            logger.error(f"BURST_DETECTION: Error - {e}")
+
+    def calculate_burst_aware_prediction(self, campaign_name, current_views, total_views, is_top_position):
+        """BOMB PREDICTOR: Burst-aware hybrid prediction"""
+        try:
+            # Base hybrid prediction
+            base_prediction = self.calculate_hybrid_prediction(campaign_name, current_views, total_views, is_top_position)
+            
+            # Add burst intelligence
+            burst_info = self.get_burst_prediction(campaign_name)
+            
+            if burst_info['burst_expected']:
+                remaining_views = total_views - current_views
+                burst_eta = burst_info['minutes_to_burst']
+                
+                if remaining_views <= burst_info['expected_burst_size']:
+                    # Burst will complete the campaign!
+                    if burst_eta <= 120:  # Within 2 hours
+                        return f"🚀 {burst_eta}min (NEXT BURST WILL COMPLETE!)"
+                    else:
+                        return f"⚡ {base_prediction} + MAJOR BURST IN {burst_eta}min"
+                else:
+                    return f"⚡ {base_prediction} + BURST IN {burst_eta}min"
+            
+            return base_prediction
             
         except Exception as e:
-            logger.error(f"PROGRESS_HISTORY: Error - {e}")
+            logger.error(f"BURST_PREDICTION: Error - {e}")
+            return "Calculating..."
 
-    def calculate_completion_prediction(self, campaign_name, current_views, total_views):
-        """Hybrid multi-window prediction in views per minute"""
+    def calculate_hybrid_prediction(self, campaign_name, current_views, total_views, is_top_position):
+        """Original hybrid prediction with multi-window analysis"""
         try:
             if campaign_name not in self.campaign_progress_history:
-                return "No data yet"
+                return "Collecting data..."
             
             history = self.campaign_progress_history[campaign_name]
             if len(history) < 2:
                 return "Collecting data..."
             
-            current_time = self.get_ist_time()
-            completion_pct = (current_views / total_views * 100) if total_views > 0 else 0
+            # Multi-window analysis
+            short_speed = self.calculate_window_speed(history, 10)
+            medium_speed = self.calculate_window_speed(history, 20)
+            long_speed = self.calculate_window_speed(history, 30)
             
-            # Define windows (in minutes)
-            short_window = 10
-            medium_window = 20
-            long_window = 30
+            # Position-based adjustment
+            position_speed = self.learning_data['position_speeds']['top_speed_avg'] if is_top_position else self.learning_data['position_speeds']['not_top_speed_avg']
             
-            # Calculate velocities for each window
-            short_velocity = self.calculate_velocity(history, short_window, current_time)
-            medium_velocity = self.calculate_velocity(history, medium_window, current_time)
-            long_velocity = self.calculate_velocity(history, long_window, current_time)
-            
-            # Adaptive weights based on completion percentage
-            if completion_pct < 80:
-                weights = [0.2, 0.3, 0.5]  # Long window favored for early stages
-            elif completion_pct < 95:
-                weights = [0.4, 0.4, 0.2]  # Balanced for mid stages
+            # Hybrid calculation
+            if position_speed > 0:
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speeds] if s > 0]
+                if valid_speeds:
+                    real_time_avg = sum(valid_speeds) / len(valid_speeds)
+                    final_speed = (real_time_avg * 0.5) + (position_speed * 0.5)
+                else:
+                    final_speed = position_speed
             else:
-                weights = [0.6, 0.3, 0.1]  # Short window favored for final stages
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]
+                if valid_speeds:
+                    final_speed = sum(valid_speeds) / len(valid_speeds)
+                else:
+                    return "Stalled"
             
-            # Calculate weighted average velocity (views per minute)
-            weighted_velocity = (short_velocity * weights[0] + 
-                               medium_velocity * weights[1] + 
-                               long_velocity * weights[2])
-            
-            if weighted_velocity <= 0:
+            if final_speed <= 0:
                 return "Stalled"
             
-            # Calculate remaining time
             remaining_views = total_views - current_views
             if remaining_views <= 0:
                 return "Completed"
             
-            minutes_remaining = remaining_views / weighted_velocity
-            predicted_end = current_time + timedelta(minutes=minutes_remaining)
+            minutes_remaining = remaining_views / final_speed
+            predicted_end = self.get_ist_time() + timedelta(minutes=minutes_remaining)
             
-            # Format prediction
             if minutes_remaining < 60:
                 time_str = f"{int(minutes_remaining)} min"
             else:
@@ -393,24 +403,56 @@ class SmartBidder:
                 mins = int(minutes_remaining % 60)
                 time_str = f"{hours}h {mins}m"
             
-            prediction_str = f"{self.format_ist_time(predicted_end)} IST ({time_str})"
-            
-            logger.info(f"🎯 PREDICTION_HYBRID: '{campaign_name}' - {completion_pct:.1f}% - {weighted_velocity:.2f} views/min - ETA: {prediction_str}")
-            
-            return prediction_str
+            return f"{self.format_ist_time(predicted_end)} IST ({time_str})"
             
         except Exception as e:
-            logger.error(f"PREDICTION: Error - {e}")
+            logger.error(f"HYBRID_PREDICTION: Error - {e}")
             return "Error calculating"
 
-    def calculate_velocity(self, history, window_minutes, current_time):
-        """Calculate views per minute for given time window"""
+    def get_burst_prediction(self, campaign_name):
+        """Predict next burst timing and size"""
         try:
-            window_start = current_time - timedelta(minutes=window_minutes)
+            if campaign_name not in self.learning_data['burst_patterns']:
+                return {'burst_expected': False}
             
-            # Find data points within the window
+            burst_data = self.learning_data['burst_patterns'][campaign_name]
+            burst_times = burst_data['burst_times']
+            
+            if len(burst_times) < 2:
+                return {'burst_expected': False}
+            
+            # Calculate average time between bursts (should be ~12 hours)
+            time_diffs = []
+            for i in range(1, len(burst_times)):
+                diff = (burst_times[i] - burst_times[i-1]).total_seconds() / 3600  # hours
+                time_diffs.append(diff)
+            
+            avg_interval = sum(time_diffs) / len(time_diffs) if time_diffs else 12.0
+            
+            last_burst = burst_times[-1]
+            next_expected_burst = last_burst + timedelta(hours=avg_interval)
+            minutes_to_burst = (next_expected_burst - self.get_ist_time()).total_seconds() / 60
+            
+            # Calculate expected burst size
+            avg_burst_size = sum(burst_data['burst_sizes']) / len(burst_data['burst_sizes']) if burst_data['burst_sizes'] else 150
+            
+            return {
+                'burst_expected': minutes_to_burst <= 240,  # Within 4 hours
+                'minutes_to_burst': int(minutes_to_burst),
+                'expected_burst_size': avg_burst_size,
+                'confidence': min(len(burst_times) / 10, 1.0)  # More samples = more confidence
+            }
+            
+        except Exception as e:
+            logger.error(f"BURST_PREDICTION: Error - {e}")
+            return {'burst_expected': False}
+
+    def calculate_window_speed(self, history, window_minutes):
+        try:
+            window_start = self.get_ist_time() - timedelta(minutes=window_minutes)
             relevant_data = []
-            for entry in reversed(history):  # Start from most recent
+            
+            for entry in reversed(history):
                 if entry['timestamp'] >= window_start:
                     relevant_data.append(entry)
                 else:
@@ -419,27 +461,86 @@ class SmartBidder:
             if len(relevant_data) < 2:
                 return 0
             
-            # Use oldest and newest in window
             oldest = relevant_data[-1]
             newest = relevant_data[0]
             
             views_gained = newest['current_views'] - oldest['current_views']
-            time_diff = (newest['timestamp'] - oldest['timestamp']).total_seconds() / 60  # in minutes
+            time_diff = (newest['timestamp'] - oldest['timestamp']).total_seconds() / 60
             
             if time_diff <= 0:
                 return 0
             
-            velocity = views_gained / time_diff  # views per minute
-            return max(0, velocity)  # Ensure non-negative
+            return views_gained / time_diff
+        except:
+            return 0
+
+    def update_progress_history(self, campaign_name, current_views, total_views, is_top_position):
+        try:
+            if campaign_name not in self.campaign_progress_history:
+                self.campaign_progress_history[campaign_name] = []
+            
+            current_time = self.get_ist_time()
+            views_per_minute = self.calculate_instant_speed(campaign_name, current_views)
+            
+            new_entry = {
+                'timestamp': current_time,
+                'current_views': current_views,
+                'total_views': total_views,
+                'is_top_position': is_top_position,
+                'views_per_minute': views_per_minute,
+                'completion_pct': (current_views / total_views * 100) if total_views > 0 else 0
+            }
+            
+            self.campaign_progress_history[campaign_name].append(new_entry)
+            if len(self.campaign_progress_history[campaign_name]) > 12:
+                self.campaign_progress_history[campaign_name] = self.campaign_progress_history[campaign_name][-12:]
+            
+            # Update learning data
+            if views_per_minute > 0:
+                if is_top_position:
+                    self.learning_data['position_speeds']['top_speed_samples'].append(views_per_minute)
+                    if len(self.learning_data['position_speeds']['top_speed_samples']) > 100:
+                        self.learning_data['position_speeds']['top_speed_samples'] = self.learning_data['position_speeds']['top_speed_samples'][-100:]
+                    self.learning_data['position_speeds']['top_speed_avg'] = sum(self.learning_data['position_speeds']['top_speed_samples']) / len(self.learning_data['position_speeds']['top_speed_samples'])
+                else:
+                    self.learning_data['position_speeds']['not_top_speed_samples'].append(views_per_minute)
+                    if len(self.learning_data['position_speeds']['not_top_speed_samples']) > 100:
+                        self.learning_data['position_speeds']['not_top_speed_samples'] = self.learning_data['position_speeds']['not_top_speed_samples'][-100:]
+                    self.learning_data['position_speeds']['not_top_speed_avg'] = sum(self.learning_data['position_speeds']['not_top_speed_samples']) / len(self.learning_data['position_speeds']['not_top_speed_samples'])
+            
+            # Detect burst patterns
+            self.detect_burst_pattern(campaign_name, current_views, current_time)
+            
+            logger.info(f"📊 PROGRESS_HISTORY: {campaign_name} - {current_views}/{total_views} - {views_per_minute:.2f} views/min")
             
         except Exception as e:
-            logger.error(f"VELOCITY_CALC: Error for {window_minutes}min window - {e}")
+            logger.error(f"PROGRESS_HISTORY: Error - {e}")
+
+    def calculate_instant_speed(self, campaign_name, current_views):
+        try:
+            if campaign_name not in self.campaign_progress_history:
+                return 0
+            
+            history = self.campaign_progress_history[campaign_name]
+            if len(history) < 2:
+                return 0
+            
+            latest = history[-1]
+            previous = history[-2]
+            
+            views_gained = current_views - previous['current_views']
+            time_diff = (self.get_ist_time() - previous['timestamp']).total_seconds() / 60
+            
+            if time_diff <= 0:
+                return 0
+            
+            return views_gained / time_diff
+        except:
             return 0
 
     def parse_campaigns_real_time(self):
-        """Real-time parsing for /status command"""
         try:
-            logger.info("PARSING_REALTIME: Fresh scrape started...")
+            logger.info("PARSING_REALTIME: Fresh scrape...")
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             
@@ -447,11 +548,10 @@ class SmartBidder:
             campaigns = {}
             
             campaign_divs = soup.find_all('div', style=re.compile(r'border.*solid.*'))
-            logger.info(f"PARSING_REALTIME: Found {len(campaign_divs)} campaign divs")
+            logger.info(f"PARSING_REALTIME: Found {len(campaign_divs)} campaigns")
             
             for i, div in enumerate(campaign_divs):
                 try:
-                    # Extract campaign name
                     campaign_name = ""
                     for element in div.contents:
                         if isinstance(element, str) and element.strip():
@@ -469,11 +569,9 @@ class SmartBidder:
                     
                     text_content = div.get_text()
                     
-                    # Extract your bid
                     bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                     your_bid = int(bid_match.group(1)) if bid_match else 0
                     
-                    # Extract progress
                     progress_match = re.search(r'(\d+,?\d*)\s*/\s*(\d+,?\d*)\s*visitors', text_content.replace(',', ''))
                     if progress_match:
                         current_views = int(progress_match.group(1).replace(',', ''))
@@ -482,17 +580,17 @@ class SmartBidder:
                         current_views = 0
                         total_views = 0
                     
-                    # Check status
                     completed = "COMPLETE" in text_content
                     active = "ACTIVE" in text_content
                     
-                    # Update progress history for predictions
-                    self.update_progress_history(campaign_name, current_views, total_views)
+                    is_top_position = your_bid >= self.current_global_bid
                     
-                    # Calculate prediction
-                    prediction = self.calculate_completion_prediction(campaign_name, current_views, total_views)
+                    # Update progress and learning
+                    self.update_progress_history(campaign_name, current_views, total_views, is_top_position)
                     
-                    # Get auto-bid setting
+                    # Calculate BURST-AWARE prediction
+                    prediction = self.calculate_burst_aware_prediction(campaign_name, current_views, total_views, is_top_position)
+                    
                     auto_bid = self.campaigns.get(campaign_name, {}).get('auto_bid', False)
                     
                     campaigns[campaign_name] = {
@@ -505,16 +603,15 @@ class SmartBidder:
                         'completion_pct': (current_views / total_views * 100) if total_views > 0 else 0,
                         'completed': completed,
                         'active': active,
+                        'is_top_position': is_top_position,
                         'status': 'COMPLETED' if completed else 'ACTIVE' if active else 'UNKNOWN',
                         'prediction': prediction,
                         'last_checked': self.get_ist_time()
                     }
                     
                 except Exception as e:
-                    logger.error(f"PARSING_REALTIME: Error parsing div {i} - {e}")
                     continue
             
-            logger.info(f"PARSING_REALTIME: Successfully parsed {len(campaigns)} campaigns")
             return campaigns
             
         except Exception as e:
@@ -522,7 +619,6 @@ class SmartBidder:
             return {}
 
     def get_global_top_bid(self):
-        """Get the global top bid from any campaign"""
         try:
             logger.info("BID_CHECK: Getting global top bid...")
             adverts_url = "https://adsha.re/adverts"
@@ -533,15 +629,12 @@ class SmartBidder:
             assign_links = soup.find_all('a', href=re.compile(r'/adverts/assign/'))
             
             if not assign_links:
-                logger.warning("BID_CHECK: No assign links found")
                 return 0
             
-            # Use first campaign to check global top bid
             first_link = assign_links[0]['href']
             if not first_link.startswith('http'):
                 first_link = f"https://adsha.re{first_link}"
             
-            logger.info(f"BID_CHECK: Checking bid page: {first_link}")
             response = self.session.get(first_link, timeout=30)
             self.human_delay()
             
@@ -551,10 +644,9 @@ class SmartBidder:
             top_bid_match = re.search(r'top bid is (\d+) credits', page_text)
             if top_bid_match:
                 top_bid = int(top_bid_match.group(1))
-                logger.info(f"BID_CHECK: Global top bid = {top_bid} credits")
+                logger.info(f"BID_CHECK: Global top bid = {top_bid}")
                 return top_bid
             
-            logger.warning("BID_CHECK: No top bid found in page")
             return 0
         except Exception as e:
             logger.error(f"BID_CHECK: Error - {e}")
@@ -566,11 +658,9 @@ class SmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             visitors_match = re.search(r'Visitors:\s*([\d,]+)', soup.get_text())
             if visitors_match:
-                visitors_str = visitors_match.group(1).replace(',', '')
-                return int(visitors_str)
+                return int(visitors_match.group(1).replace(',', ''))
             return 0
-        except Exception as e:
-            logger.error(f"CREDITS: Visitor credits error - {e}")
+        except:
             return 0
 
     def get_traffic_credits(self):
@@ -579,40 +669,30 @@ class SmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             credit_div = soup.find('div', style=re.compile(r'font-size:22pt'))
             if credit_div:
-                credit_text = credit_div.get_text().strip()
-                credit_match = re.search(r'(\d+\.?\d*)', credit_text)
+                credit_match = re.search(r'(\d+\.?\d*)', credit_div.get_text().strip())
                 if credit_match:
                     return float(credit_match.group(1))
             return 0
-        except Exception as e:
-            logger.error(f"CREDITS: Traffic credits error - {e}")
+        except:
             return 0
 
     def send_telegram(self, message):
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            data = {
-                "chat_id": self.chat_id, 
-                "text": message,
-                "parse_mode": 'HTML'
-            }
+            data = {"chat_id": self.chat_id, "text": message, "parse_mode": 'HTML'}
             response = self.session.post(url, json=data, timeout=30)
             return response.status_code == 200
-        except Exception as e:
-            logger.error(f"TELEGRAM: Send error - {e}")
+        except:
             return False
 
     def check_bid_drop(self, new_bid):
-        """Check if global bid dropped significantly"""
         if len(self.bid_history) < 2:
             return False, 0
         
         previous_bid = self.bid_history[-1]['bid']
-        
-        # Only alert if bid drops by more than 50 credits
         if new_bid < previous_bid - 50:
             drop_amount = previous_bid - new_bid
-            logger.info(f"BID_ALERT: Drop detected {previous_bid} → {new_bid} (-{drop_amount})")
+            logger.info(f"BID_ALERT: Drop {previous_bid}→{new_bid} (-{drop_amount})")
             return True, drop_amount
         
         return False, 0
@@ -651,6 +731,10 @@ class SmartBidder:
             self.send_campaigns_list()
         elif command_lower == '/bids':
             self.send_bid_history()
+        elif command_lower == '/extensions':
+            self.send_extension_suggestions()
+        elif command_lower == '/bursts':
+            self.send_burst_analysis()
         elif command_lower == '/autobid on':
             self.auto_bid_enabled = True
             self.save_to_github()
@@ -666,7 +750,7 @@ class SmartBidder:
         elif command_lower == '/help':
             self.send_help()
         else:
-            self.send_telegram("❌ Unknown command. Use /help for commands")
+            self.send_telegram("❌ Unknown command. Use /help")
 
     def handle_auto_command(self, command):
         parts = command.split()
@@ -697,7 +781,7 @@ class SmartBidder:
     def start_monitoring(self):
         self.is_monitoring = True
         logger.info("MONITORING: Started")
-        self.send_telegram("🚀 SMART BIDDER ACTIVATED!\n\n24/7 monitoring with hybrid prediction engine!")
+        self.send_telegram("💣 BOMB PREDICTOR ACTIVATED!\n\n12-hour burst detection + 1000-2000 visitors/day optimization!")
 
     def stop_monitoring(self):
         self.is_monitoring = False
@@ -705,43 +789,36 @@ class SmartBidder:
         self.send_telegram("🛑 Monitoring STOPPED")
 
     def send_enhanced_status_real_time(self):
-        """Real-time status with fresh scraping"""
-        logger.info("STATUS_REALTIME: Generating real-time status...")
+        logger.info("STATUS_REALTIME: Generating...")
         
         if not self.smart_login():
             self.send_telegram("❌ Cannot fetch status - login failed")
             return
         
-        # Fresh scrape for real-time data
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
         current_time = self.format_ist_time()
         
-        # Get fresh campaign data
         campaigns = self.parse_campaigns_real_time()
-        self.campaigns.update(campaigns)  # Merge with existing data
+        self.campaigns.update(campaigns)
         
         status_msg = f"""
-📊 REAL-TIME STATUS REPORT
+💣 BOMB PREDICTOR - REAL-TIME STATUS
 
 💰 CREDITS:
 Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 
 🎯 GLOBAL TOP BID: {self.current_global_bid} credits
 
-🏆 CAMPAIGN STATUS:
+🏆 CAMPAIGN STATUS (BURST-AWARE):
 """
         
         if self.campaigns:
             for name, data in self.campaigns.items():
-                is_top = data.get('your_bid', 0) >= data.get('top_bid', 0)
+                is_top = data.get('is_top_position', False)
                 status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
                 position = "🏆 #1" if is_top else "📉 #2+"
-                
-                # Add completion status
                 status_icon = "✅" if data.get('completed') else "🟢" if data.get('active') else "⚪"
-                
-                # Add prediction if available
                 prediction = data.get('prediction', 'Calculating...')
                 
                 status_msg += f"{position} {status_icon} {name}\n"
@@ -749,23 +826,30 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
                 status_msg += f"   📈 Progress: {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n"
                 status_msg += f"   🎯 Predicted End: {prediction}\n\n"
         else:
-            status_msg += "No campaigns detected yet. Checking adverts page...\n\n"
+            status_msg += "No campaigns detected.\n\n"
 
-        status_msg += f"🕒 {current_time} IST | 🤖 Real-time data"
+        # Add burst analysis
+        burst_campaigns = [name for name in self.campaigns if name in self.learning_data['burst_patterns']]
+        if burst_campaigns:
+            status_msg += "🚀 BURST-LEARNING ACTIVE:\n"
+            for campaign in burst_campaigns[:2]:
+                burst_info = self.get_burst_prediction(campaign)
+                if burst_info['burst_expected']:
+                    status_msg += f"⚡ {campaign} - Next burst in {burst_info['minutes_to_burst']}min\n"
+
+        status_msg += f"🕒 {current_time} IST | 💣 12-hour burst detection"
         self.send_telegram(status_msg)
-        logger.info("STATUS_REALTIME: Sent real-time status")
 
     def send_campaigns_list(self):
-        """Detailed campaign list with predictions"""
         if not self.campaigns:
-            self.send_telegram("📊 No campaigns found yet. The bot is checking adverts page...")
+            self.send_telegram("📊 No campaigns found.")
             return
         
-        campaigns_text = "📋 YOUR CAMPAIGNS\n\n"
+        campaigns_text = "📋 YOUR CAMPAIGNS (BURST-AWARE)\n\n"
         
         for name, data in self.campaigns.items():
             auto_status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
-            position = "🏆 #1" if data.get('your_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
+            position = "🏆 #1" if data.get('is_top_position', False) else "📉 #2+"
             status_icon = "✅ COMPLETED" if data.get('completed') else "🟢 ACTIVE" if data.get('active') else "⚪ UNKNOWN"
             prediction = data.get('prediction', 'Calculating...')
             
@@ -778,13 +862,37 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         campaigns_text += "💡 Use /auto [campaign] on/off to control auto-bidding"
         self.send_telegram(campaigns_text)
 
-    def send_bid_history(self):
-        """Clean bid history - only show actual changes"""
-        if not self.bid_history:
-            self.send_telegram("📊 No bid history yet. Monitoring in progress...")
+    def send_burst_analysis(self):
+        """NEW: Show burst pattern analysis"""
+        if not self.learning_data['burst_patterns']:
+            self.send_telegram("🚀 No burst patterns detected yet. Checking...")
             return
         
-        # Filter to only show actual bid changes
+        analysis_msg = "🚀 BURST PATTERN ANALYSIS\n\n"
+        
+        for campaign, data in self.learning_data['burst_patterns'].items():
+            burst_info = self.get_burst_prediction(campaign)
+            
+            analysis_msg += f"<b>{campaign}</b>\n"
+            analysis_msg += f"📊 Bursts detected: {len(data['burst_times'])}\n"
+            
+            if burst_info['burst_expected']:
+                analysis_msg += f"🎯 Next burst: {burst_info['minutes_to_burst']} minutes\n"
+                analysis_msg += f"📈 Expected size: ~{burst_info['expected_burst_size']} views\n"
+                analysis_msg += f"🎲 Confidence: {burst_info['confidence']*100:.0f}%\n"
+            else:
+                analysis_msg += "⏳ Collecting burst data...\n"
+            
+            analysis_msg += "\n"
+        
+        analysis_msg += "💡 Bursts happen every ~12 hours (your revisit timing)"
+        self.send_telegram(analysis_msg)
+
+    def send_bid_history(self):
+        if not self.bid_history:
+            self.send_telegram("📊 No bid history yet.")
+            return
+        
         filtered_history = []
         last_bid = None
         
@@ -795,19 +903,18 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
                 last_bid = current_bid
         
         if not filtered_history:
-            self.send_telegram("📊 No bid changes recorded yet.")
+            self.send_telegram("📊 No bid changes recorded.")
             return
         
         history_msg = "📈 GLOBAL BID HISTORY (Changes only):\n\n"
         
-        for record in filtered_history[-10:]:  # Last 10 changes
+        for record in filtered_history[-10:]:
             if 'time' in record and isinstance(record['time'], datetime):
                 time_str = self.format_ist_time(record['time'])
             else:
                 time_str = "Unknown"
             history_msg += f"🕒 {time_str} - {record['bid']} credits\n"
         
-        # Add current bid info
         if filtered_history:
             current_bid = filtered_history[-1]['bid']
             if len(filtered_history) >= 2:
@@ -817,6 +924,57 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
                 history_msg += f"\n{change_icon} Current: {current_bid} credits (Change: {change:+d})"
         
         self.send_telegram(history_msg)
+
+    def get_extension_suggestions(self):
+        suggestions = []
+        visitor_credits = self.get_visitor_credits()
+        
+        for campaign_name, data in self.campaigns.items():
+            if data.get('completed') and campaign_name not in self.completed_campaigns:
+                # BURST-AWARE extension timing
+                burst_info = self.get_burst_prediction(campaign_name)
+                suggested_views = min(500, visitor_credits)
+                
+                suggestion = {
+                    'campaign': campaign_name,
+                    'suggested_views': suggested_views,
+                    'credits_needed': suggested_views,
+                    'current_bid': data.get('your_bid', 0)
+                }
+                
+                # Add burst timing advice
+                if burst_info['burst_expected']:
+                    if burst_info['minutes_to_burst'] < 60:
+                        suggestion['advice'] = f"WAIT {burst_info['minutes_to_burst']}min - Extend after next burst"
+                    else:
+                        suggestion['advice'] = "EXTEND NOW - Catch current cycle"
+                else:
+                    suggestion['advice'] = "EXTEND NOW - Normal timing"
+                
+                suggestions.append(suggestion)
+        
+        return suggestions
+
+    def send_extension_suggestions(self):
+        suggestions = self.get_extension_suggestions()
+        
+        if not suggestions:
+            self.send_telegram("✅ No completed campaigns needing extension.")
+            return
+        
+        extensions_text = "💡 BURST-AWARE EXTENSION SUGGESTIONS\n\n"
+        
+        for suggestion in suggestions:
+            extensions_text += f"✅ <b>{suggestion['campaign']}</b>\n"
+            extensions_text += f"   📊 Add: {suggestion['suggested_views']} views\n"
+            extensions_text += f"   💰 Cost: {suggestion['credits_needed']} credits\n"
+            extensions_text += f"   🎯 Strategy: {suggestion.get('advice', 'Normal extension')}\n\n"
+        
+        visitor_credits = self.get_visitor_credits()
+        extensions_text += f"💰 Your credits: {visitor_credits:,} visitors available\n"
+        extensions_text += "🚀 Maximizing unique viewers in 24h with burst timing!"
+        
+        self.send_telegram(extensions_text)
 
     def set_max_bid(self, command):
         try:
@@ -833,56 +991,117 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 
     def send_help(self):
         help_msg = """
-🤖 SMART BIDDER - COMMANDS:
+💣 BOMB PREDICTOR - COMMANDS:
 
 /start - Start 24/7 monitoring
 /stop - Stop monitoring
-/status - Real-time status with predictions
+/status - Real-time status with burst predictions
 /campaigns - List all campaigns with ETAs
 /bids - Clean bid history (changes only)
+/extensions - Completed campaigns with burst timing
+/bursts - Burst pattern analysis
 /target [amount] - Set max bid limit
 /autobid on/off - Auto-bid for all campaigns
 /auto [campaign] on/off - Auto-bid for specific campaign
 
-🎯 NEW FEATURES:
-• Real-time status with fresh scraping
-• Hybrid ETA predictions (multi-window)
-• Clean bid history (changes only)
-• Fixed 99% completion alerts
-• Enhanced Railway logging
+🎯 BOMB PREDICTOR FEATURES:
+• 12-hour burst detection & prediction
+• "NEXT BURST WILL COMPLETE!" alerts
+• Burst-aware extension timing
+• 1000-2000 visitors/day optimization
+• Maximum unique viewers strategy
+• GitHub learning persistence
 """
         self.send_telegram(help_msg)
 
     def check_completion_alerts(self):
-        """Check and send completion alerts"""
         try:
             for campaign_name, campaign_data in self.campaigns.items():
                 completion_pct = campaign_data.get('completion_pct', 0)
                 
-                # Check for 99% completion alert
+                # 99% completion alert with BURST AWARENESS
                 if 99.0 <= completion_pct < 100.0:
                     alert_key = f"99pct_{campaign_name}"
                     if alert_key not in self.sent_alerts:
-                        message = f"🚨 CAMPAIGN NEARING COMPLETION!\n\n\"{campaign_name}\"\n📈 Progress: {campaign_data['progress']} ({completion_pct:.1f}%)\n\n⏰ EXTEND SOON - Will complete shortly!"
+                        burst_info = self.get_burst_prediction(campaign_name)
+                        
+                        if burst_info['burst_expected'] and burst_info['minutes_to_burst'] < 120:
+                            # Burst coming soon - recommend WAIT
+                            message = f"""
+🚨 CAMPAIGN AT 99% - BURST STRATEGY!
+
+"{campaign_name}"
+📈 Progress: {campaign_data['progress']} ({completion_pct:.1f}%)
+Remaining: {campaign_data['total_views'] - campaign_data['current_views']} views
+
+🎯 BURST PREDICTION:
+Next 12-hour cycle in: {burst_info['minutes_to_burst']} minutes
+Expected burst: ~{burst_info['expected_burst_size']} views
+
+💡 RECOMMENDATION: WAIT {burst_info['minutes_to_burst']} MINUTES
+- Will complete naturally in next burst
+- Save credits for optimal extension
+- Maximum unique viewers strategy ✅
+"""
+                        else:
+                            # Normal 99% alert
+                            message = f"""
+🚨 CAMPAIGN NEARING COMPLETION!
+
+"{campaign_name}"
+📈 Progress: {campaign_data['progress']} ({completion_pct:.1f}%)
+
+⏰ EXTEND SOON - Will complete shortly!
+"""
+                        
                         self.send_telegram(message)
                         self.sent_alerts[alert_key] = True
-                        logger.info(f"COMPLETION_ALERT: Sent 99% alert for {campaign_name}")
+                        logger.info(f"COMPLETION_ALERT: 99% alert for {campaign_name}")
                 
-                # Check for 100% completion alert
+                # 100% completion alert with extension suggestion
                 if completion_pct >= 99.9 and campaign_data.get('completed'):
                     alert_key = f"completed_{campaign_name}"
                     if alert_key not in self.sent_alerts:
-                        message = f"✅ CAMPAIGN COMPLETED!\n\n\"{campaign_name}\"\n📈 Progress: {campaign_data['progress']} (100%)\n\n🚨 EXTEND NOW - Bid reset to 0!"
+                        visitor_credits = self.get_visitor_credits()
+                        suggested_views = min(500, visitor_credits)
+                        
+                        # Burst-aware extension timing
+                        burst_info = self.get_burst_prediction(campaign_name)
+                        timing_advice = ""
+                        if burst_info['burst_expected']:
+                            if burst_info['minutes_to_burst'] < 60:
+                                timing_advice = f"⏰ Next burst in {burst_info['minutes_to_burst']}min - Perfect timing!"
+                            else:
+                                timing_advice = f"🔄 Next burst in {burst_info['minutes_to_burst']}min - Extend now!"
+                        
+                        message = f"""
+✅ CAMPAIGN COMPLETED - BURST TIMING!
+
+"{campaign_name}"
+📊 Final: {campaign_data['progress']} (100%)
+
+💡 SMART EXTENSION STRATEGY:
+Add {suggested_views} views using {suggested_views} credits
+{timing_advice}
+
+💰 Your credits: {visitor_credits:,} visitors available
+🎯 Goal: Maximum unique viewers in 24h
+🚀 Action: Go to adsha.re → Find campaign → Add views
+"""
                         self.send_telegram(message)
                         self.sent_alerts[alert_key] = True
-                        logger.info(f"COMPLETION_ALERT: Sent 100% alert for {campaign_name}")
+                        self.completed_campaigns[campaign_name] = {
+                            'completed_time': self.get_ist_time(),
+                            'total_views': campaign_data['total_views'],
+                            'your_bid': campaign_data['your_bid']
+                        }
+                        logger.info(f"COMPLETION_ALERT: 100% alert for {campaign_name}")
                         
         except Exception as e:
             logger.error(f"COMPLETION_ALERT: Error - {e}")
 
     def send_hourly_status(self):
-        """Automatic hourly status report"""
-        if not self.campaigns and not self.bid_history:
+        if not self.campaigns:
             return
             
         traffic_credits = self.get_traffic_credits()
@@ -890,7 +1109,7 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         current_time = self.format_ist_time()
         
         status_msg = f"""
-🕐 HOURLY STATUS REPORT
+🕐 HOURLY STATUS - BOMB PREDICTOR
 🕒 {current_time} IST
 
 💰 CREDITS:
@@ -905,58 +1124,46 @@ Visitors: {visitor_credits:,}
             status_msg += "📊 YOUR CAMPAIGNS:\n"
             for name, data in self.campaigns.items():
                 if 'progress' in data:
-                    position = "🏆 #1" if data.get('your_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
+                    position = "🏆 #1" if data.get('is_top_position', False) else "📉 #2+"
                     status_icon = "✅" if data.get('completed') else "🟢"
                     prediction = data.get('prediction', 'Calculating...')
                     status_msg += f"{position} {status_icon} \"{name}\" - {data['progress']} ({data.get('completion_pct', 0):.1f}%)\n"
                     status_msg += f"   🎯 ETA: {prediction}\n"
         
-        if self.bid_history:
-            # Get last bid change
-            last_change = None
-            current_bid = self.bid_history[-1]['bid'] if self.bid_history else 0
-            for i in range(len(self.bid_history)-2, -1, -1):
-                if self.bid_history[i]['bid'] != current_bid:
-                    last_change = self.bid_history[i]
-                    break
-            
-            if last_change:
-                change = current_bid - last_change['bid']
-                change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-                status_msg += f"\n{change_icon} Last Bid Change: {last_change['bid']} → {current_bid} ({change:+d} credits)"
+        # Add burst learning progress
+        burst_campaigns = len(self.learning_data['burst_patterns'])
+        total_bursts = sum(len(data['burst_times']) for data in self.learning_data['burst_patterns'].values())
         
-        status_msg += "\n\n🤖 Hybrid prediction engine active..."
+        status_msg += f"\n🚀 BURST LEARNING: {burst_campaigns} campaigns, {total_bursts} bursts tracked"
+        status_msg += "\n\n💣 12-hour cycle optimization active..."
         
         self.send_telegram(status_msg)
-        logger.info("HOURLY_STATUS: Sent automatic report")
+        logger.info("HOURLY_STATUS: Sent bomb predictor report")
 
     def check_and_alert(self):
-        """Main monitoring function with hybrid predictions"""
         if not self.is_monitoring:
             return
         
         if not self.smart_login():
-            logger.error("MONITORING: Cannot check - login failed")
+            logger.error("MONITORING: Login failed")
             return
         
         # Get global top bid
         global_top_bid = self.get_global_top_bid()
         
         if global_top_bid > 0:
-            # Only record bid if it changed
+            # Only record bid if changed
             if not self.bid_history or self.bid_history[-1]['bid'] != global_top_bid:
                 self.bid_history.append({
                     'bid': global_top_bid,
                     'time': self.get_ist_time(),
                     'type': 'global'
                 })
-                logger.info(f"💰 BID_UPDATE: Global bid changed to {global_top_bid} credits - recorded in history")
+                logger.info(f"💰 BID_UPDATE: Changed to {global_top_bid} credits")
             
-            # Keep only last 100 records
             if len(self.bid_history) > 100:
                 self.bid_history = self.bid_history[-100:]
             
-            # Update global bid
             self.current_global_bid = global_top_bid
             
             # Check for bid drops
@@ -964,7 +1171,7 @@ Visitors: {visitor_credits:,}
                 drop_detected, drop_amount = self.check_bid_drop(global_top_bid)
                 if drop_detected:
                     current_time = time.time()
-                    if current_time - self.last_alert_time > 3600:  # 1 hour cooldown
+                    if current_time - self.last_alert_time > 3600:
                         previous_bid = self.bid_history[-2]['bid']
                         alert_msg = f"""
 📉 BID DROP OPPORTUNITY!
@@ -976,36 +1183,32 @@ Perfect time to start new campaign!
 """
                         self.send_telegram(alert_msg)
                         self.last_alert_time = current_time
-                        logger.info(f"BID_ALERT: Sent drop alert - saved {drop_amount} credits")
+                        logger.info(f"BID_ALERT: Drop alert sent")
         
-        # Parse campaigns with updated global bid and predictions
+        # Parse campaigns with BURST-AWARE predictions
         new_campaigns = self.parse_campaigns_real_time()
-        
-        # Update campaigns with global top bid
         for campaign_name in new_campaigns:
             new_campaigns[campaign_name]['top_bid'] = self.current_global_bid
-        
         self.campaigns.update(new_campaigns)
         
-        # Check for completion alerts
+        # Check completion alerts with burst awareness
         self.check_completion_alerts()
         
-        # Auto-save to GitHub Gist every hour
+        # Auto-save every hour
         if time.time() - self.last_save_time > 3600:
             self.save_to_github()
 
     def run(self):
-        logger.info("🚀 Starting Smart Bidder with hybrid prediction engine...")
+        logger.info("💣 Starting Ultimate Bomb Predictor...")
         
         if not self.force_login():
             logger.error("❌ Failed to start - login failed")
             return
         
-        # Initialize sent alerts if not loaded
         if not hasattr(self, 'sent_alerts'):
             self.sent_alerts = {}
         
-        startup_msg = f"🤖 SMART BIDDER STARTED!\n• Hybrid prediction engine\n• Real-time status\n• Clean bid history\n• Enhanced logging\nType /help for commands"
+        startup_msg = "💣 BOMB PREDICTOR STARTED!\n• 12-hour burst detection\n• 1000-2000 visitors/day optimization\n• Maximum unique viewers strategy\n• Burst-aware predictions\nType /help for commands"
         self.send_telegram(startup_msg)
         
         last_check = 0
@@ -1025,14 +1228,14 @@ Perfect time to start new campaign!
                 
                 # Check bids every 5 minutes if monitoring
                 if self.is_monitoring and current_time - last_check >= self.check_interval:
-                    logger.info("🔍 Performing scheduled check with predictions...")
+                    logger.info("🔍 Performing scheduled check...")
                     self.check_and_alert()
                     last_check = current_time
-                    logger.info("✅ Check completed with predictions")
+                    logger.info("✅ Check completed")
                 
                 # Hourly status report
                 if self.is_monitoring and current_time - last_hourly_status >= 3600:
-                    logger.info("🕐 Sending hourly status report...")
+                    logger.info("🕐 Sending hourly status...")
                     self.send_hourly_status()
                     last_hourly_status = current_time
                 
@@ -1043,5 +1246,5 @@ Perfect time to start new campaign!
                 time.sleep(30)
 
 if __name__ == "__main__":
-    bot = SmartBidder()
+    bot = UltimateBidder()
     bot.run()
