@@ -92,24 +92,31 @@ class UltimateBidder:
         return dt.strftime("%I:%M %p")
 
     def save_to_github(self):
-        """Save ALL data to GitHub Gist"""
-        if not self.github_token:
-            return False
-            
-        try:
-            data = {
-                'bid_history': self.bid_history,
-                'campaigns': self.campaigns,
-                'completed_campaigns': self.completed_campaigns,
-                'campaign_progress_history': self.serialize_progress_history(),
-                'learning_data': self.learning_data,  # ALL learning data
-                'max_bid_limit': self.max_bid_limit,
-                'auto_bid_enabled': self.auto_bid_enabled,
-                'current_global_bid': self.current_global_bid,
-                'sent_alerts': self.sent_alerts,
-                'last_save': datetime.now().isoformat(),
-                'gist_id': self.gist_id
-            }
+    """Save ALL data to GitHub Gist"""
+    if not self.github_token:
+        return False
+    
+    # Convert datetime objects to strings
+    for item in self.bid_history:
+        if 'time' in item and isinstance(item['time'], datetime):
+            item['time'] = item['time'].isoformat()
+        
+    try:
+        data = {
+            'bid_history': self.bid_history,
+            'campaigns': self.campaigns,
+            'completed_campaigns': self.completed_campaigns,
+            'campaign_progress_history': self.serialize_progress_history(),
+            'learning_data': self.learning_data,
+            'max_bid_limit': self.max_bid_limit,
+            'auto_bid_enabled': self.auto_bid_enabled,
+            'current_global_bid': self.current_global_bid,
+            'sent_alerts': self.sent_alerts,
+            'last_save': datetime.now().isoformat(),
+            'gist_id': self.gist_id
+        }
+        
+        # ... continue with the rest of your existing save_to_github code ...
             
             # Convert datetime objects
             for item in data['bid_history']:
@@ -373,7 +380,7 @@ class UltimateBidder:
             
             # Hybrid calculation
             if position_speed > 0:
-                valid_speeds = [s for s in [short_speed, medium_speed, long_speeds] if s > 0]
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]
                 if valid_speeds:
                     real_time_avg = sum(valid_speeds) / len(valid_speeds)
                     final_speed = (real_time_avg * 0.5) + (position_speed * 0.5)
