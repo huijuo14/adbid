@@ -4,117 +4,62 @@ import time
 import re
 import logging
 import random
-from datetime import datetime, timedelta
-from flask import Flask
-import threading
-import pickle
+from datetime import datetime
 import os
-import socket
-import sys
 
-# Instance locking
-def check_port_in_use(port=10002):
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('0.0.0.0', port))
-            return False
-    except OSError:
-        return True
-
-for i in range(5):
-    if check_port_in_use():
-        if i == 4:
-            print("❌ Another instance is running! Exiting...")
-            sys.exit(1)
-        time.sleep(2)
-    else:
-        break
-
-print("✅ Instance check passed - starting bot...")
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Standard logging setup (Simplified: Removed EnhancedFormatter)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger()
-
-app = Flask(__name__)
 
 class UltimateSmartBidder:
     def __init__(self):
-        self.bot_token = "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc"
-        self.chat_id = "2052085789"
+        # ✅ Core settings from environment variables (Keep)
+        self.bot_token = os.environ.get('BOT_TOKEN', "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc")
+        self.chat_id = os.environ.get('CHAT_ID', "2052085789")
+        self.email = os.environ.get('EMAIL', "loginallapps@gmail.com")
+        self.password = os.environ.get('PASSWORD', "@Sd2007123")
         self.last_update_id = 0
-        self.email = "loginallapps@gmail.com"
-        self.password = "@Sd2007123"
         
         self.session = requests.Session()
         self.rotate_user_agent()
         self.session_valid = False
         
         self.is_monitoring = False
-        self.campaigns = {}
+        # State is not persistent, so campaigns start fresh
+        self.campaigns = {} 
+        self.last_bid_time = {} # For rate-limiting bids
         
-        self.minimal_bid_weights = [1, 2]  # Only +1 or +2 credits
-        self.check_interval = 300  # Fixed 5-minute checks
-        self.max_bid_limit = 369  # Your maximum bid limit
+        # ✅ Configurable bidding parameters (Keep)
+        self.minimal_bid_weights = [1, 2]
+        self.check_interval = int(os.environ.get('CHECK_INTERVAL', '180'))
+        self.max_bid_limit = int(os.environ.get('MAX_BID_LIMIT', '369'))
+        self.bid_cooldown = 60 # Cooldown in seconds between bids
         
-        self.visitor_alert_threshold = 1000
-        self.visitor_stop_threshold = 500
+        # ✅ Credit Protection Settings (Feature 5 - Keep)
+        self.visitor_alert_threshold = int(os.environ.get('VISITOR_ALERT_THRESHOLD', '1000'))
+        self.visitor_stop_threshold = int(os.environ.get('VISITOR_STOP_THRESHOLD', '500'))
         self.current_traffic_credits = 0
         self.current_visitor_credits = 0
         self.last_credit_alert = None
         
-        # Competitor tracking
-        self.competitor_activity = {}
-        self.bid_history = {}
-        
-        # Alert tracking
-        self.sent_alerts = {}
-        
-        self.load_bot_state()
+        logger.info(f"BOT_INITIALIZED - Check interval: {self.check_interval}s, Max bid: {self.max_bid_limit}")
 
-    def save_bot_state(self):
-        try:
-            state_data = {
-                'campaigns': self.campaigns,
-                'last_update_id': self.last_update_id,
-                'session_valid': self.session_valid,
-                'is_monitoring': self.is_monitoring,
-                'sent_alerts': self.sent_alerts,
-                'competitor_activity': self.competitor_activity,
-                'bid_history': self.bid_history
-            }
-            with open('bot_state.pkl', 'wb') as f:
-                pickle.dump(state_data, f)
-        except Exception as e:
-            logger.error(f"Save state error: {e}")
-
-    def load_bot_state(self):
-        try:
-            if os.path.exists('bot_state.pkl'):
-                with open('bot_state.pkl', 'rb') as f:
-                    state_data = pickle.load(f)
-                    self.campaigns = state_data.get('campaigns', {})
-                    self.last_update_id = state_data.get('last_update_id', 0)
-                    self.session_valid = state_data.get('session_valid', False)
-                    self.is_monitoring = state_data.get('is_monitoring', False)
-                    self.sent_alerts = state_data.get('sent_alerts', {})
-                    self.competitor_activity = state_data.get('competitor_activity', {})
-                    self.bid_history = state_data.get('bid_history', {})
-                logger.info("📂 Bot state loaded")
-        except Exception as e:
-            logger.error(f"Load state error: {e}")
-
+    # --- Utilities (Keep) ---
     def rotate_user_agent(self):
         user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36']
         self.session.headers.update({'User-Agent': random.choice(user_agents)})
 
     def human_delay(self, min_seconds=2, max_seconds=5):
-        delay = random.uniform(min_seconds, max_seconds)
-        time.sleep(delay)
-        return delay
+        time.sleep(random.uniform(min_seconds, max_seconds))
 
+    # --- Login & Session (Keep) ---
     def force_login(self):
         try:
-            logger.info("🔄 Logging in...")
+            logger.info("LOGIN_ATTEMPT - Starting login process")
             self.human_delay(2, 4)
             
             login_url = "https://adsha.re/login"
@@ -124,39 +69,31 @@ class UltimateSmartBidder:
             soup = BeautifulSoup(response.content, 'html.parser')
             form = soup.find('form', {'name': 'login'})
             if not form:
-                logger.error("❌ Login form not found!")
+                logger.error("LOGIN_FAILED - Login form not found")
                 return False
                 
             action_path = form.get('action', '')
             post_url = f"https://adsha.re{action_path}" if not action_path.startswith('http') else action_path
             
-            password_field = None
-            for field in form.find_all('input'):
-                field_name = field.get('name', '')
-                field_value = field.get('value', '')
-                if field_value == 'Password' and field_name != 'mail' and field_name:
-                    password_field = field_name
-                    break
+            password_field = next((field.get('name') for field in form.find_all('input') if field.get('value') == 'Password' and field.get('name')), None)
             
             if not password_field:
-                logger.error("❌ Could not find password field!")
+                logger.error("LOGIN_FAILED - Password field not found")
                 return False
             
-            login_data = {
-                'mail': self.email,
-                password_field: self.password
-            }
-            
+            login_data = {'mail': self.email, password_field: self.password}
             response = self.session.post(post_url, data=login_data, allow_redirects=True)
             self.human_delay(1, 2)
             
             if self.check_session_valid():
                 self.session_valid = True
-                logger.info("✅ Login successful!")
+                logger.info("LOGIN_SUCCESS - Session active")
                 return True
+            
+            logger.error("LOGIN_FAILED - Session validation failed")
             return False
         except Exception as e:
-            logger.error(f"❌ Login error: {e}")
+            logger.error(f"LOGIN_ERROR - {e}")
             return False
 
     def check_session_valid(self):
@@ -173,10 +110,14 @@ class UltimateSmartBidder:
 
     def smart_login(self):
         if self.check_session_valid():
+            logger.info("SESSION_VALID - Session still active")
             self.session_valid = True
             return True
+        
+        logger.warning("SESSION_EXPIRED - Re-login required")
         return self.force_login()
 
+    # --- Credit Protection (Feature 5 - Keep) ---
     def get_traffic_credits(self):
         try:
             response = self.session.get("https://adsha.re/exchange/credits/adverts", timeout=30)
@@ -188,7 +129,8 @@ class UltimateSmartBidder:
                 if credit_match:
                     return float(credit_match.group(1))
             return 0
-        except:
+        except Exception as e:
+            logger.error(f"TRAFFIC_CREDITS_ERROR - {e}")
             return 0
 
     def get_visitor_credits(self):
@@ -200,14 +142,14 @@ class UltimateSmartBidder:
                 visitors_str = visitors_match.group(1).replace(',', '')
                 return int(visitors_str)
             return 0
-        except:
+        except Exception as e:
+            logger.error(f"VISITOR_CREDITS_ERROR - {e}")
             return 0
 
     def check_credit_safety(self):
         self.current_traffic_credits = self.get_traffic_credits()
         self.current_visitor_credits = self.get_visitor_credits()
         
-        # Credit conversion reminder
         if self.current_traffic_credits >= 1000:
             if self.last_credit_alert != 'convert':
                 self.send_telegram(f"💰 CONVERT CREDITS: You have {self.current_traffic_credits} traffic credits - convert to visitors!")
@@ -227,7 +169,8 @@ class UltimateSmartBidder:
         self.last_credit_alert = None
         return True
 
-    def send_telegram(self, message, parse_mode='HTML', reply_markup=None):
+    # --- Telegram Communication & Commands (Feature 7 - Keep) ---
+    def send_telegram(self, message, parse_mode='HTML'):
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             data = {
@@ -235,144 +178,218 @@ class UltimateSmartBidder:
                 "text": message, 
                 "parse_mode": parse_mode
             }
-            if reply_markup:
-                data["reply_markup"] = reply_markup
-                
             response = self.session.post(url, json=data, timeout=30)
             return response.status_code == 200
-        except:
+        except Exception as e:
+            logger.error(f"TELEGRAM_SEND_ERROR - {e}")
             return False
 
-    def send_main_menu(self):
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "📊 Status", "callback_data": "status"}],
-                [{"text": "📋 Campaigns", "callback_data": "campaigns"}],
-                [{"text": "💰 Credits", "callback_data": "credits"}],
-                [{"text": "🎯 Auto Bid", "callback_data": "auto_bid"}],
-                [{"text": "🕵️ Competitors", "callback_data": "competitors"}],
-                [{"text": "🛑 Stop", "callback_data": "stop"}]
-            ]
-        }
+    def process_telegram_command(self):
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+            params = {'offset': self.last_update_id + 1, 'timeout': 5}
+            response = self.session.get(url, params=params, timeout=10)
+            data = response.json()
+            
+            if data.get('ok') and data.get('result'):
+                for update in data['result']:
+                    update_id = update['update_id']
+                    if update_id > self.last_update_id:
+                        self.last_update_id = update_id
+                        if 'message' in update and 'text' in update['message']:
+                            text = update['message']['text']
+                            chat_id = update['message']['chat']['id']
+                            if str(chat_id) != self.chat_id:
+                                continue
+                            if text.startswith('/'):
+                                self.handle_command(text, chat_id)
+        except Exception as e:
+            logger.error(f"TELEGRAM_COMMAND_ERROR - {e}")
+
+    def handle_command(self, command, chat_id):
+        command_lower = command.lower().strip()
+        
+        if command_lower == '/start':
+            self.start_monitoring()
+        elif command_lower == '/stop':
+            self.stop_monitoring()
+        elif command_lower == '/status':
+            self.send_enhanced_status()
+        elif command_lower == '/campaigns':
+            self.send_campaigns_list()
+        elif command_lower == '/credits':
+            self.send_credit_status()
+        elif command_lower.startswith('/auto'):
+            self.handle_auto_command(command)
+        elif command_lower == '/help':
+            self.send_enhanced_help()
+        else:
+            self.send_telegram("❌ Unknown command. Use /help for available commands")
+
+    def handle_auto_command(self, command):
+        parts = command.split()
+        
+        if len(parts) == 1:
+            self.send_telegram("❌ Usage: /auto [campaign] on/off\nOr: /auto all on/off")
+            return
+            
+        # Simplified auto-handling since no state saving is used.
+        if len(parts) == 2 and parts[1].lower() in ['on', 'off']:
+            action = parts[1].lower()
+            self.toggle_all_auto_bid(action == 'on')
+            return
+            
+        if len(parts) == 3 and parts[1].lower() == 'all':
+            action = parts[2].lower()
+            self.toggle_all_auto_bid(action == 'on')
+            return
+            
+        if len(parts) >= 3:
+            campaign_name = ' '.join(parts[1:-1])
+            action = parts[-1].lower()
+            
+            if action not in ['on', 'off']:
+                return
+            
+            found_campaign = next((name for name in self.campaigns if name.lower() == campaign_name.lower()), None)
+            
+            if found_campaign:
+                self.toggle_auto_bid(found_campaign, action == 'on')
+            else:
+                self.send_telegram(f"❌ Campaign '{campaign_name}' not found.")
+
+    def toggle_auto_bid(self, campaign_name, enable):
+        if campaign_name in self.campaigns:
+            self.campaigns[campaign_name]['auto_bid'] = enable
+            status = "enabled" if enable else "disabled"
+            self.send_telegram(f"🔄 Auto-bid {status} for '{campaign_name}' (Note: Setting will be lost on restart)")
+            logger.info(f"AUTO_BID_TOGGLE - {campaign_name} | {status}")
+
+    def toggle_all_auto_bid(self, enable):
+        for campaign_name in self.campaigns:
+            self.campaigns[campaign_name]['auto_bid'] = enable
+        
+        status = "enabled" if enable else "disabled"
+        self.send_telegram(f"🔄 Auto-bid {status} for all campaigns (Note: Settings will be lost on restart)")
+        logger.info(f"AUTO_BID_ALL_TOGGLE - All campaigns | {status}")
+
+    def start_monitoring(self):
+        self.is_monitoring = True
+        logger.info("BOT_STARTED - Monitoring activated")
+        self.send_telegram("🚀 Smart Bidder ACTIVATED!\nMonitoring all campaigns...")
+        self.send_enhanced_status()
+
+    def stop_monitoring(self):
+        self.is_monitoring = False
+        logger.info("BOT_STOPPED - Monitoring stopped")
+        self.send_telegram("🛑 Bot STOPPED!\nUse /start to resume monitoring.")
+
+    def send_enhanced_status(self):
+        if not self.campaigns:
+            self.send_telegram("📊 No campaigns loaded. Monitoring adsha.re for campaigns...")
+            return
         
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
-        
-        message = f"""
-🤖 ULTIMATE SMART BIDDER
+            
+        status_msg = f"""
+📊 STATUS REPORT
 
-💰 Credits: Traffic {traffic_credits} | Visitors {visitor_credits:,}
-📊 Active Campaigns: {len(self.campaigns)}
+💰 CREDITS:
+Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 
-Tap buttons below to control your bot:
+🏆 CAMPAIGN STATUS:
 """
-        self.send_telegram(message, reply_markup=keyboard)
+        
+        for name, data in self.campaigns.items():
+            is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
+            status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
+            position = "🏆 #1" if is_top else f"📉 #{data.get('position', '2+')}"
+            
+            views_info = ""
+            if 'views' in data:
+                views = data['views']
+                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
+                views_info = f"\n   📈 Progress: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)"
+            
+            status_msg += f"{position} <b>{name}</b>\n"
+            status_msg += f"   💰 Bid: {data['my_bid']} | Top: {data.get('top_bid', 'N/A')} | {status}{views_info}\n\n"
 
-    def send_campaigns_menu(self):
+        status_msg += "🤖 Bot is actively monitoring..."
+        self.send_telegram(status_msg)
+
+    def send_campaigns_list(self):
         if not self.campaigns:
-            self.send_telegram("📊 No campaigns loaded. Send /start")
+            self.send_telegram("📊 No campaigns found yet.")
             return
         
         campaigns_text = "📋 YOUR CAMPAIGNS\n\n"
-        keyboard_buttons = []
         
         for name, data in self.campaigns.items():
-            auto_status = "✅ ON" if data.get('auto_bid', False) else "❌ OFF"
-            position = "🏆" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉"
+            auto_status = "✅ AUTO" if data.get('auto_bid', False) else "❌ MANUAL"
+            position = "🏆 #1" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
             
             campaigns_text += f"{position} <b>{name}</b>\n"
-            campaigns_text += f"Bid: {data['my_bid']} credits | Auto: {auto_status}\n"
+            campaigns_text += f"   💰 Your Bid: {data['my_bid']} | Top Bid: {data.get('top_bid', 'N/A')} | {auto_status}\n"
             
             if 'views' in data:
                 views = data['views']
                 progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                campaigns_text += f"Views: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)\n"
+                campaigns_text += f"   📈 Progress: {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)\n"
             
             campaigns_text += "\n"
-            
-            # Add toggle buttons for this campaign
-            keyboard_buttons.append([
-                {"text": f"✅ {name} ON", "callback_data": f"auto_on_{name}"},
-                {"text": f"❌ {name} OFF", "callback_data": f"auto_off_{name}"}
-            ])
         
-        # Add back button
-        keyboard_buttons.append([{"text": "📊 Back to Main", "callback_data": "main_menu"}])
-        
-        keyboard = {"inline_keyboard": keyboard_buttons}
-        self.send_telegram(campaigns_text, reply_markup=keyboard)
+        campaigns_text += "💡 Use /auto [campaign] on/off to control auto-bidding"
+        self.send_telegram(campaigns_text)
 
-    def send_auto_bid_menu(self):
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "✅ ALL ON", "callback_data": "auto_all_on"}],
-                [{"text": "❌ ALL OFF", "callback_data": "auto_all_off"}],
-                [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
-            ]
-        }
-        
-        message = "🎯 AUTO-BID CONTROL\n\nToggle auto-bid for all campaigns:"
-        self.send_telegram(message, reply_markup=keyboard)
-
-    def send_competitors_menu(self):
-        if not self.competitor_activity:
-            message = "🕵️ No competitor data collected yet. Check back later."
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
-                ]
-            }
-            self.send_telegram(message, reply_markup=keyboard)
-            return
-        
-        report = "🕵️ COMPETITOR ACTIVITY\n\n"
-        
-        for campaign, activity in self.competitor_activity.items():
-            report += f"<b>{campaign}</b>:\n"
-            
-            if activity.get('active_hours'):
-                active_hours = sorted(activity['active_hours'])[:3]
-                report += f"🕐 Active: {', '.join([f'{h}:00' for h in active_hours])}\n"
-            
-            if activity.get('last_bid_time'):
-                last_bid = activity['last_bid_time']
-                report += f"⏰ Last bid: {last_bid.strftime('%H:%M')}\n"
-            
-            report += "\n"
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🔄 Refresh", "callback_data": "competitors"}],
-                [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
-            ]
-        }
-        
-        self.send_telegram(report, reply_markup=keyboard)
-
-    def send_credits_menu(self):
+    def send_credit_status(self):
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
         
-        message = f"""
-💰 CREDIT STATUS
+        credit_msg = f"""
+💰 CREDIT MANAGEMENT
 
 Traffic Credits: {traffic_credits}
 Visitor Credits: {visitor_credits:,}
 """
         
         if traffic_credits >= 1000:
-            message += "\n💰 Convert 1000+ traffic credits to visitors!"
+            credit_msg += "\n💡 RECOMMENDATION: Convert traffic credits to visitors!\n"
         
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "📊 Back to Main", "callback_data": "main_menu"}]
-            ]
-        }
+        if visitor_credits < self.visitor_alert_threshold:
+            credit_msg += "⚠️ WARNING: Visitor credits getting low.\n"
         
-        self.send_telegram(message, reply_markup=keyboard)
+        if visitor_credits < self.visitor_stop_threshold:
+            credit_msg += "🛑 CRITICAL: Very low visitors. Auto-bid will stop soon.\n"
+        
+        credit_msg += f"\nAuto-bid status: {'✅ ACTIVE' if self.is_monitoring else '❌ PAUSED'}"
+        
+        self.send_telegram(credit_msg)
+
+    def send_enhanced_help(self):
+        help_msg = """
+🤖 SMART BIDDER - HELP
+
+/start - Start monitoring
+/stop - Stop monitoring  
+/status - Get current status
+/campaigns - List all campaigns
+/credits - Credit management overview
+/help - Show this message
+
+⚙️ AUTO-BID CONTROL:
+/auto all on/off - Toggle all campaigns
+/auto [campaign] on/off - Toggle specific campaign
+
+⚠️ NOTE: Since you disabled state saving, campaign settings (like auto-bid status) will be lost on bot restart/redeploy.
+"""
+        self.send_telegram(help_msg)
 
     def send_hourly_status(self):
-        """Send automatic hourly status"""
+        """Send automatic hourly status report"""
+        if not self.campaigns:
+            return
+            
         traffic_credits = self.get_traffic_credits()
         visitor_credits = self.get_visitor_credits()
         
@@ -390,204 +407,15 @@ Visitors: {visitor_credits:,}
             if 'views' in data:
                 views = data['views']
                 progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                status_msg += f"\"{name}\" - {views['current']:,}/{views['total']:,} views ({progress_pct:.1f}%)\n"
+                position = "🏆 #1" if data.get('my_bid', 0) >= data.get('top_bid', 0) else "📉 #2+"
+                status_msg += f"{position} \"{name}\" - {views['current']:,}/{views['total']:,} views ({progress_pct:.1f}%)\n"
         
         status_msg += "\n🤖 Bot is actively monitoring..."
         
         self.send_telegram(status_msg)
-        logger.info("📊 Sent hourly status report")
+        logger.info("HOURLY_STATUS_SENT - Automatic report delivered")
 
-    def process_telegram_command(self):
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
-            params = {'offset': self.last_update_id + 1, 'timeout': 5}
-            
-            response = self.session.get(url, params=params, timeout=10)
-            data = response.json()
-            
-            if data.get('ok') and data.get('result'):
-                for update in data['result']:
-                    update_id = update['update_id']
-                    
-                    if update_id > self.last_update_id:
-                        self.last_update_id = update_id
-                        
-                        # Handle callback queries (button clicks)
-                        if 'callback_query' in update:
-                            self.handle_callback_query(update['callback_query'])
-                            continue
-                            
-                        if 'message' in update and 'text' in update['message']:
-                            text = update['message']['text']
-                            chat_id = update['message']['chat']['id']
-                            
-                            if str(chat_id) != self.chat_id:
-                                continue
-                                
-                            if text.startswith('/'):
-                                self.handle_command(text, chat_id)
-        except:
-            pass
-
-    def handle_callback_query(self, callback_query):
-        data = callback_query['data']
-        message_id = callback_query['message']['message_id']
-        
-        if data == 'main_menu':
-            self.send_main_menu()
-        elif data == 'status':
-            self.send_smart_status()
-        elif data == 'campaigns':
-            self.send_campaigns_menu()
-        elif data == 'credits':
-            self.send_credits_menu()
-        elif data == 'auto_bid':
-            self.send_auto_bid_menu()
-        elif data == 'competitors':
-            self.send_competitors_menu()
-        elif data == 'stop':
-            self.stop_monitoring()
-        elif data == 'auto_all_on':
-            self.toggle_all_auto_bid(True)
-            self.send_auto_bid_menu()
-        elif data == 'auto_all_off':
-            self.toggle_all_auto_bid(False)
-            self.send_auto_bid_menu()
-        elif data.startswith('auto_on_'):
-            campaign_name = data[8:]  # Remove 'auto_on_'
-            self.toggle_auto_bid(campaign_name, True)
-            self.send_campaigns_menu()
-        elif data.startswith('auto_off_'):
-            campaign_name = data[9:]  # Remove 'auto_off_'
-            self.toggle_auto_bid(campaign_name, False)
-            self.send_campaigns_menu()
-
-    def toggle_auto_bid(self, campaign_name, enable):
-        if campaign_name in self.campaigns:
-            self.campaigns[campaign_name]['auto_bid'] = enable
-            status = "enabled" if enable else "disabled"
-            self.send_telegram(f"🔄 Auto-bid {status} for {campaign_name}")
-            self.save_bot_state()
-
-    def toggle_all_auto_bid(self, enable):
-        for campaign_name in self.campaigns:
-            self.campaigns[campaign_name]['auto_bid'] = enable
-        
-        status = "enabled" if enable else "disabled"
-        self.send_telegram(f"🔄 Auto-bid {status} for all campaigns")
-        self.save_bot_state()
-
-    def handle_command(self, command, chat_id):
-        command_lower = command.lower().strip()
-        
-        if command_lower == '/start':
-            self.start_monitoring()
-        elif command_lower == '/stop':
-            self.stop_monitoring()
-        elif command_lower == '/status':
-            self.send_smart_status()
-        elif command_lower.startswith('/auto'):
-            self.handle_auto_command(command)
-        elif command_lower == '/menu':
-            self.send_main_menu()
-        elif command_lower == '/help':
-            self.send_help()
-        else:
-            self.send_telegram("❌ Unknown command. Use /help or /menu for buttons")
-
-    def handle_auto_command(self, command):
-        parts = command.split()
-        
-        if len(parts) == 1:
-            self.send_telegram("❌ Usage: /auto [campaign] on/off")
-            return
-            
-        if len(parts) == 2 and parts[1].lower() in ['on', 'off']:
-            action = parts[1].lower()
-            self.toggle_all_auto_bid(action == 'on')
-            return
-            
-        if len(parts) >= 3:
-            campaign_name = ' '.join(parts[1:-1])  # No quotes needed
-            action = parts[-1].lower()
-            
-            if action not in ['on', 'off']:
-                return
-            
-            found_campaign = None
-            for stored_name in self.campaigns.keys():
-                if stored_name.lower() == campaign_name.lower():
-                    found_campaign = stored_name
-                    break
-            
-            if found_campaign:
-                self.toggle_auto_bid(found_campaign, action == 'on')
-
-    def start_monitoring(self):
-        self.is_monitoring = True
-        logger.info("🚀 Smart monitoring started")
-        self.send_telegram("🚀 Ultimate Smart Bidder Activated!")
-        self.send_main_menu()
-
-    def stop_monitoring(self):
-        self.is_monitoring = False
-        logger.info("🛑 Monitoring stopped")
-        self.send_telegram("🛑 Bot Stopped!")
-
-    def send_smart_status(self):
-        if not self.campaigns:
-            self.send_telegram("📊 No campaigns loaded. Send /start")
-            return
-        
-        traffic_credits = self.get_traffic_credits()
-        visitor_credits = self.get_visitor_credits()
-            
-        campaigns_list = ""
-        
-        for name, data in self.campaigns.items():
-            is_top = data.get('my_bid', 0) >= data.get('top_bid', 0)
-            status = "✅" if data.get('auto_bid', False) else "❌"
-            position = "🏆 TOP" if is_top else "📉 #2+"
-            
-            views_info = ""
-            if 'views' in data:
-                views = data['views']
-                progress_pct = (views['current'] / views['total'] * 100) if views['total'] > 0 else 0
-                views_info = f"\n   📊 {views['current']:,}/{views['total']:,} ({progress_pct:.1f}%)"
-            
-            campaigns_list += f"{position} {name}: {data['my_bid']} credits (Auto: {status}){views_info}\n"
-
-        status_msg = f"""
-📊 SMART STATUS
-
-💰 CREDITS: Traffic {traffic_credits} | Visitors {visitor_credits:,}
-
-{campaigns_list}
-"""
-        self.send_telegram(status_msg)
-
-    def send_help(self):
-        help_msg = """
-🤖 ULTIMATE SMART BIDDER
-
-/menu - Show button controls
-/start - Start monitoring
-/stop - Stop monitoring  
-/status - Detailed status
-/auto [campaign] on/off - Toggle auto-bid
-
-💡 FEATURES:
-• +1-2 credit bidding
-• Max bid protection (369)
-• Campaign completion alerts
-• Credit conversion reminders
-• Competitor activity tracking
-• Bid change alerts
-• Hourly status reports
-• Button controls
-"""
-        self.send_telegram(help_msg)
-
+    # --- Campaign Logic (Feature 1 - Keep) ---
     def parse_campaigns(self, html_content):
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
@@ -608,42 +436,31 @@ Visitors: {visitor_credits:,}
                     campaign_name = campaign_name.split('http')[0].strip()
                 campaign_name = campaign_name.rstrip('.:- ')
                 
-                if not campaign_name:
-                    continue
+                if not campaign_name: continue
                 
                 text_content = div.get_text()
-                
                 bid_match = re.search(r'Campaign Bid:\s*(\d+)', text_content)
                 my_bid = int(bid_match.group(1)) if bid_match else 0
                 
                 views_match = re.search(r'(\d+)\s*/\s*(\d+)\s*visitors', text_content)
-                hits_match = re.search(r'(\d+)\s*hits', text_content)
                 
                 current_views = int(views_match.group(1)) if views_match else 0
                 total_views = int(views_match.group(2)) if views_match else 0
-                total_hits = int(hits_match.group(1)) if hits_match else 0
                 
                 if campaign_name and my_bid > 0:
-                    auto_bid = False
-                    if campaign_name in self.campaigns:
-                        auto_bid = self.campaigns[campaign_name].get('auto_bid', False)
+                    # Auto-bid status is not loaded, defaults to False or inherited if running
+                    auto_bid = self.campaigns.get(campaign_name, {}).get('auto_bid', False)
                     
                     new_campaigns[campaign_name] = {
                         'my_bid': my_bid,
                         'top_bid': my_bid,
                         'auto_bid': auto_bid,
-                        'last_bid_time': None,
-                        'last_checked': None,
-                        'views': {
-                            'current': current_views,
-                            'total': total_views,
-                            'hits': total_hits
-                        }
+                        'views': {'current': current_views, 'total': total_views}
                     }
             
             return new_campaigns
         except Exception as e:
-            logger.error(f"Error parsing campaigns: {e}")
+            logger.error(f"PARSE_CAMPAIGNS_ERROR - {e}")
             return {}
 
     def get_top_bid_from_bid_page(self, campaign_name):
@@ -672,104 +489,39 @@ Visitors: {visitor_credits:,}
                     if top_bid_match:
                         return int(top_bid_match.group(1))
             return None
-        except:
+        except Exception as e:
+            logger.error(f"GET_TOP_BID_ERROR - {e}")
             return None
 
     def calculate_minimal_bid(self, current_top_bid):
         new_bid = current_top_bid + random.choice(self.minimal_bid_weights)
         
-        # Max bid protection
+        # Max Bid Limit Alert (Feature 3 - Keep)
         if new_bid > self.max_bid_limit:
             self.send_telegram(f"🛑 MAX BID LIMIT: Would bid {new_bid} but max is {self.max_bid_limit}!")
-            return None  # Don't bid
+            return None
         
         return new_bid
-
-    def track_competitor_activity(self, campaign_name, old_top_bid, new_top_bid, current_time):
-        if campaign_name not in self.competitor_activity:
-            self.competitor_activity[campaign_name] = {
-                'active_hours': set(),
-                'sleep_hours': set(),
-                'bid_changes': [],
-                'last_bid_time': None
-            }
-        
-        activity = self.competitor_activity[campaign_name]
-        current_hour = current_time.hour
-        
-        # Track bid changes
-        if old_top_bid != new_top_bid:
-            activity['bid_changes'].append({
-                'time': current_time,
-                'old_bid': old_top_bid,
-                'new_bid': new_top_bid,
-                'change': new_top_bid - old_top_bid
-            })
-            
-            # Keep only last 100 changes
-            activity['bid_changes'] = activity['bid_changes'][-100:]
-            
-            # Update last bid time
-            activity['last_bid_time'] = current_time
-            
-            # Track active hours (when bids change)
-            activity['active_hours'].add(current_hour)
-        
-        # Clean up old data (keep only last 7 days)
-        activity['bid_changes'] = [change for change in activity['bid_changes'] 
-                                 if (current_time - change['time']).days < 7]
-
-    def check_completion_alerts(self, campaign_name, campaign_data):
-        if 'views' not in campaign_data:
-            return
-            
-        current = campaign_data['views']['current']
-        total = campaign_data['views']['total']
-        
-        if total == 0:
-            return
-            
-        completion_ratio = current / total
-        alert_key = f"{campaign_name}_{int(completion_ratio * 100)}"
-        
-        # 50% alert
-        if completion_ratio >= 0.5 and completion_ratio < 0.75:
-            if alert_key not in self.sent_alerts:
-                self.send_telegram(f"📊 Campaign Progress:\n\"{campaign_name}\" - {current:,}/{total:,} views (50%)\n✅ Halfway there!")
-                self.sent_alerts[alert_key] = True
-        
-        # 75% alert  
-        elif completion_ratio >= 0.75 and completion_ratio < 0.98:
-            if alert_key not in self.sent_alerts:
-                self.send_telegram(f"📊 Campaign Progress:\n\"{campaign_name}\" - {current:,}/{total:,} views (75%)\n⚠️ Almost done!")
-                self.sent_alerts[alert_key] = True
-        
-        # 98% alert
-        elif completion_ratio >= 0.98 and completion_ratio < 1.0:
-            if alert_key not in self.sent_alerts:
-                self.send_telegram(f"📊 Campaign Progress:\n\"{campaign_name}\" - {current:,}/{total:,} views (98%)\n🎯 Virtually complete - Ready to extend soon!")
-                self.sent_alerts[alert_key] = True
-        
-        # 100% alert
-        elif completion_ratio >= 1.0:
-            if alert_key not in self.sent_alerts:
-                self.send_telegram(f"✅ Campaign Completed:\n\"{campaign_name}\" - {current:,}/{total:,} views (100%)\n🚨 EXTEND NOW - Bid reset to 0!")
-                self.sent_alerts[alert_key] = True
 
     def execute_smart_auto_bid(self, campaign_name, campaign_data, current_top_bid):
         try:
             if campaign_data['my_bid'] >= current_top_bid:
                 return
             
+            # Bid Cooldown / Rate Limiting (Feature 1 - Keep)
+            current_time = time.time()
+            last_bid = self.last_bid_time.get(campaign_name, 0)
+            if current_time - last_bid < self.bid_cooldown:
+                logger.info(f"RATE_LIMITED - {campaign_name} | Cooldown active")
+                return
+            
             old_bid = campaign_data['my_bid']
             new_bid = self.calculate_minimal_bid(current_top_bid)
             
-            if new_bid is None:  # Max bid limit reached
-                return
-                
-            if new_bid <= old_bid:
+            if new_bid is None or new_bid <= old_bid:
                 return
             
+            # --- Bid Execution Sequence ---
             adverts_url = "https://adsha.re/adverts"
             response = self.session.get(adverts_url, timeout=30)
             self.human_delay(1, 2)
@@ -786,17 +538,14 @@ Visitors: {visitor_credits:,}
                         bid_url = f"https://adsha.re{bid_url}"
                     break
             
-            if not bid_url:
-                return
+            if not bid_url: return
             
             response = self.session.get(bid_url, timeout=30)
             self.human_delay(1, 2)
             
             soup = BeautifulSoup(response.content, 'html.parser')
             form = soup.find('form', {'name': 'bid'})
-            
-            if not form:
-                return
+            if not form: return
             
             action = form.get('action', '')
             if not action.startswith('http'):
@@ -809,14 +558,15 @@ Visitors: {visitor_credits:,}
             
             if response.status_code == 200:
                 campaign_data['my_bid'] = new_bid
-                campaign_data['last_bid_time'] = datetime.now()
+                self.last_bid_time[campaign_name] = time.time()
                 
-                logger.info(f"🚀 SMART BID: {campaign_name} {old_bid}→{new_bid}")
+                logger.info(f"AUTO_BID_SUCCESS - {campaign_name} | {old_bid} → {new_bid} | Regained #1")
                 
+                # Auto-Bid Success Alert (Feature 3 - Keep)
                 success_msg = f"""
-🚀 SMART BID SUCCESS!
+🚀 AUTO-BID SUCCESS!
 
-📊 Campaign: {campaign_name}
+📊 Campaign: <b>{campaign_name}</b>
 🎯 Bid: {old_bid} → {new_bid} credits
 📈 Increase: +{new_bid - old_bid} credits
 🏆 Position: #1 Achieved!
@@ -824,13 +574,15 @@ Visitors: {visitor_credits:,}
                 self.send_telegram(success_msg)
                 
         except Exception as e:
-            logger.error(f"Bid error: {e}")
+            logger.error(f"AUTO_BID_ERROR - {campaign_name} | {e}")
 
+    # --- Main Check Loop (Feature 1, 4, 5 - Keep) ---
     def check_all_campaigns(self):
         if not self.is_monitoring:
             return
         
         if not self.smart_login():
+            logger.error("CAMPAIGN_CHECK_FAILED - Cannot check campaigns - login failed")
             return
         
         try:
@@ -840,70 +592,81 @@ Visitors: {visitor_credits:,}
             
             new_campaigns_data = self.parse_campaigns(response.content)
             
+            # Update existing campaigns and add new ones
             for campaign_name, new_data in new_campaigns_data.items():
-                if campaign_name in self.campaigns:
+                if campaign_name not in self.campaigns:
+                    self.campaigns[campaign_name] = new_data
+                else:
                     auto_bid = self.campaigns[campaign_name].get('auto_bid', False)
                     self.campaigns[campaign_name].update(new_data)
-                    self.campaigns[campaign_name]['auto_bid'] = auto_bid
-                else:
-                    self.campaigns[campaign_name] = new_data
+                    self.campaigns[campaign_name]['auto_bid'] = auto_bid # Retain current auto_bid status
+
+            # Remove campaigns no longer on the page
+            campaigns_to_delete = [name for name in self.campaigns if name not in new_campaigns_data]
+            for name in campaigns_to_delete:
+                 logger.warning(f"CAMPAIGN_REMOVED - '{name}' not found on page. Removing from tracking.")
+                 del self.campaigns[name]
             
             if not self.campaigns:
+                logger.info("NO_CAMPAIGNS - No campaigns found")
                 return
             
             credit_safe = self.check_credit_safety()
             current_time = datetime.now()
             
             for campaign_name, campaign_data in self.campaigns.items():
+                
+                # Fetch top bid
                 top_bid = self.get_top_bid_from_bid_page(campaign_name)
                 
-                if top_bid:
+                if top_bid is not None:
                     old_top_bid = campaign_data.get('top_bid', 0)
                     campaign_data['top_bid'] = top_bid
                     campaign_data['last_checked'] = current_time
                     
-                    # Track competitor activity
-                    self.track_competitor_activity(campaign_name, old_top_bid, top_bid, current_time)
+                    position = 1 if campaign_data['my_bid'] >= top_bid else 2
+                    campaign_data['position'] = position
                     
-                    # Check for bid changes alert
-                    if old_top_bid > 0:
+                    # 🔔 BID CHANGE ALERT (Feature 4 - Keep)
+                    if old_top_bid > 0 and top_bid != old_top_bid:
                         if top_bid < old_top_bid:
                             self.send_telegram(f"🔔 BID DECREASE:\n\"{campaign_name}\" - Top bid dropped from {old_top_bid} to {top_bid}!")
                         elif top_bid > old_top_bid:
                             self.send_telegram(f"📈 BID INCREASE:\n\"{campaign_name}\" - Top bid rose from {old_top_bid} to {top_bid}!")
+                        logger.warning(f"BID_CHANGE - {campaign_name} | {old_top_bid} → {top_bid}")
                     
-                    # Check completion alerts
-                    self.check_completion_alerts(campaign_name, campaign_data)
+                    logger.info(f"CAMPAIGN_CHECK - {campaign_name} | Your: {campaign_data['my_bid']} | Top: {top_bid} | Position: #{position}")
                     
-                    logger.info(f"📊 {campaign_name}: Your {campaign_data['my_bid']}, Top {top_bid}")
-                    
+                    # Auto Bid Execution (Feature 1)
                     if credit_safe and campaign_data['auto_bid']:
                         self.execute_smart_auto_bid(campaign_name, campaign_data, top_bid)
                         
-            self.save_bot_state()
+                else:
+                    logger.warning(f"CAMPAIGN_REMOVED - '{campaign_name}' no longer found on bid page. Removing.")
+                    del self.campaigns[campaign_name]
                         
         except Exception as e:
-            logger.error(f"Check error: {e}")
+            logger.error(f"CHECK_ALL_CAMPAIGNS_ERROR - {e}")
 
+    # --- Main Loop (Simplified) ---
     def run(self):
-        logger.info("🤖 Starting Ultimate Smart Bidder...")
+        logger.info("BOT_STARTING - Initializing Smart Bidder...")
         
         if not self.force_login():
-            logger.error("❌ Initial login failed")
+            logger.error("FATAL - Initial login failed. Bot cannot start.")
             return
         
-        self.send_telegram("🚀 Ultimate Smart Bidder Activated!")
-        self.send_main_menu()
+        self.send_telegram("🚀 Smart Bidder is now ONLINE.\nType /help for commands.")
         
         last_command_check = 0
         last_campaign_check = 0
-        last_save_time = time.time()
         last_hourly_status = time.time()
         
         while True:
             try:
                 current_time = time.time()
                 
+                # Process Telegram commands every 3 seconds
                 if current_time - last_command_check >= 3:
                     self.process_telegram_command()
                     last_command_check = current_time
@@ -914,42 +677,19 @@ Visitors: {visitor_credits:,}
                         self.send_hourly_status()
                     last_hourly_status = current_time
                 
-                if current_time - last_save_time >= 300:
-                    self.save_bot_state()
-                    last_save_time = current_time
-                
+                # Campaign checks every check_interval (3 minutes default)
                 if self.is_monitoring:
                     if current_time - last_campaign_check >= self.check_interval:
                         self.check_all_campaigns()
                         last_campaign_check = current_time
-                        logger.info(f"🔄 Check complete. Next in {self.check_interval//60}min")
+                        logger.info(f"CHECK_CYCLE_COMPLETE - Next check in {self.check_interval//60}min")
                 
                 time.sleep(1)
                 
             except Exception as e:
-                logger.error(f"Main loop error: {e}")
+                logger.error(f"MAIN_LOOP_ERROR - {e}")
                 time.sleep(30)
 
-@app.route('/')
-def home():
-    return "🤖 Ultimate Smart Bidder - Active"
-
-@app.route('/health')
-def health():
-    return "✅ Bot Healthy"
-
-@app.route('/ip')
-def show_ip():
-    return "🌐 Bot IP Check"
-
-def run_bot():
-    bot = UltimateSmartBidder()
-    app.bot_instance = bot
-    bot.run()
-
 if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    app.run(host='0.0.0.0', port=10002, debug=False)
+    bot = UltimateSmartBidder()
+    bot.run()
