@@ -32,7 +32,7 @@ class UltimateBidder:
         self.session_valid = False
         
         # Monitoring settings
-        self.is_monitoring = False
+        self.is_monitoring = True  # Auto-start monitoring
         self.auto_bid_enabled = False
         self.max_bid_limit = 100
         
@@ -49,7 +49,7 @@ class UltimateBidder:
                 'not_top_speed_avg': 0,
                 'confidence_score': 0.0
             },
-            'burst_patterns': {},  # NEW: 12-hour cycle tracking
+            'burst_patterns': {},
             'time_patterns': {
                 'hourly_speeds': {},
                 'daily_speeds': {}
@@ -142,7 +142,6 @@ class UltimateBidder:
         for alert_key, alert_data in self.sent_alerts.items():
             if isinstance(alert_data, dict):
                 serialized[alert_key] = alert_data.copy()
-                # Handle any datetime objects in alert data
                 for key, value in serialized[alert_key].items():
                     if isinstance(value, datetime):
                         serialized[alert_key][key] = value.isoformat()
@@ -465,14 +464,14 @@ class UltimateBidder:
             
             # Hybrid calculation
             if position_speed > 0:
-                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]  # FIXED: long_speeds -> long_speed
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]
                 if valid_speeds:
                     real_time_avg = sum(valid_speeds) / len(valid_speeds)
                     final_speed = (real_time_avg * 0.5) + (position_speed * 0.5)
                 else:
                     final_speed = position_speed
             else:
-                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]  # FIXED: long_speeds -> long_speed
+                valid_speeds = [s for s in [short_speed, medium_speed, long_speed] if s > 0]
                 if valid_speeds:
                     final_speed = sum(valid_speeds) / len(valid_speeds)
                 else:
