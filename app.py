@@ -36,6 +36,18 @@ class UltimateBidder:
         self.auto_bid_enabled = False
         self.max_bid_limit = 100
         
+        # Bidding parameters from second script
+        self.minimal_bid_weights = [1, 2]
+        self.bid_cooldown = 60  # Cooldown in seconds between bids
+        self.last_bid_time = {}  # For rate-limiting bids
+        
+        # Credit Protection Settings
+        self.visitor_alert_threshold = 1000
+        self.visitor_stop_threshold = 500
+        self.current_traffic_credits = 0
+        self.current_visitor_credits = 0
+        self.last_credit_alert = None
+        
         # Data storage - BOMB PREDICTOR EDITION
         self.bid_history = []
         self.campaigns = {}
@@ -65,7 +77,6 @@ class UltimateBidder:
         
         # Timing
         self.check_interval = 300  # 5 minutes
-        self.bid_cooldown = 60
         
         # Load saved data
         if self.github_token:
@@ -91,6 +102,10 @@ class UltimateBidder:
             dt = self.get_ist_time()
         return dt.strftime("%I:%M %p")
 
+    def human_delay(self, min_seconds=1, max_seconds=3):
+        time.sleep(random.uniform(min_seconds, max_seconds))
+
+    # === PERSISTENCE METHODS ===
     def serialize_bid_history(self):
         """Convert bid history to JSON-serializable format"""
         serialized = []
@@ -306,9 +321,7 @@ class UltimateBidder:
             logger.error(f"GIST_LOAD: Error - {e}")
             return False
 
-    def human_delay(self, min_seconds=1, max_seconds=3):
-        time.sleep(random.uniform(min_seconds, max_seconds))
-
+    # === LOGIN & SESSION MANAGEMENT ===
     def force_login(self):
         try:
             logger.info("LOGIN: Attempting...")
@@ -366,6 +379,55 @@ class UltimateBidder:
             return True
         return self.force_login()
 
+    # === CREDIT MANAGEMENT ===
+    def get_visitor_credits(self):
+        try:
+            response = self.session.get("https://adsha.re/adverts", timeout=30)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            visitors_match = re.search(r'Visitors:\s*([\d,]+)', soup.get_text())
+            if visitors_match:
+                return int(visitors_match.group(1).replace(',', ''))
+            return 0
+        except:
+            return 0
+
+    def get_traffic_credits(self):
+        try:
+            response = self.session.get("https://adsha.re/exchange/credits/adverts", timeout=30)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            credit_div = soup.find('div', style=re.compile(r'font-size:22pt'))
+            if credit_div:
+                credit_match = re.search(r'(\d+\.?\d*)', credit_div.get_text().strip())
+                if credit_match:
+                    return float(credit_match.group(1))
+            return 0
+        except:
+            return 0
+
+    def check_credit_safety(self):
+        self.current_traffic_credits = self.get_traffic_credits()
+        self.current_visitor_credits = self.get_visitor_credits()
+        
+        if self.current_traffic_credits >= 1000:
+            if self.last_credit_alert != 'convert':
+                self.send_telegram(f"💰 CONVERT CREDITS: You have {self.current_traffic_credits} traffic credits - convert to visitors!")
+                self.last_credit_alert = 'convert'
+        
+        if self.current_visitor_credits < self.visitor_stop_threshold:
+            if self.last_credit_alert != 'stop':
+                self.send_telegram(f"🛑 CRITICAL: Only {self.current_visitor_credits} visitors left! Auto-bid stopped.")
+                self.last_credit_alert = 'stop'
+            return False
+        elif self.current_visitor_credits < self.visitor_alert_threshold:
+            if self.last_credit_alert != 'alert':
+                self.send_telegram(f"⚠️ WARNING: Low visitors - {self.current_visitor_credits} left!")
+                self.last_credit_alert = 'alert'
+            return True
+        
+        self.last_credit_alert = None
+        return True
+
+    # === BOMB PREDICTOR INTELLIGENCE ===
     def detect_burst_pattern(self, campaign_name, current_views, current_time):
         """Detect and learn 12-hour burst patterns"""
         try:
@@ -445,7 +507,7 @@ class UltimateBidder:
             return "Calculating..."
 
     def calculate_hybrid_prediction(self, campaign_name, current_views, total_views, is_top_position):
-        """Original hybrid prediction with multi-window analysis - FIXED VERSION"""
+        """Original hybrid prediction with multi-window analysis"""
         try:
             if campaign_name not in self.campaign_progress_history:
                 return "Collecting data..."
@@ -454,10 +516,10 @@ class UltimateBidder:
             if len(history) < 2:
                 return "Collecting data..."
             
-            # Multi-window analysis - FIXED: changed 'long_speeds' to 'long_speed'
+            # Multi-window analysis
             short_speed = self.calculate_window_speed(history, 10)
             medium_speed = self.calculate_window_speed(history, 20)
-            long_speed = self.calculate_window_speed(history, 30)  # FIXED VARIABLE NAME
+            long_speed = self.calculate_window_speed(history, 30)
             
             # Position-based adjustment
             position_speed = self.learning_data['position_speeds']['top_speed_avg'] if is_top_position else self.learning_data['position_speeds']['not_top_speed_avg']
@@ -629,6 +691,121 @@ class UltimateBidder:
         except:
             return 0
 
+    # === AUTO-BIDDING LOGIC (FROM SECOND SCRIPT) ===
+    def get_top_bid_from_bid_page(self, campaign_name):
+        try:
+            adverts_url = "https://adsha.re/adverts"
+            response = self.session.get(adverts_url, timeout=30)
+            self.human_delay(1, 2)
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            increase_links = soup.find_all('a', href=re.compile(r'/adverts/bid/'))
+            
+            for link in increase_links:
+                campaign_div = link.find_parent('div', style=re.compile(r'border.*solid.*#8CC63F'))
+                if campaign_div and campaign_name in campaign_div.get_text():
+                    bid_url = link['href']
+                    if not bid_url.startswith('http'):
+                        bid_url = f"https://adsha.re{bid_url}"
+                    
+                    response = self.session.get(bid_url, timeout=30)
+                    self.human_delay(1, 2)
+                    
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    top_bid_text = soup.get_text()
+                    top_bid_match = re.search(r'top bid is (\d+) credits', top_bid_text)
+                    
+                    if top_bid_match:
+                        return int(top_bid_match.group(1))
+            return None
+        except Exception as e:
+            logger.error(f"GET_TOP_BID_ERROR - {e}")
+            return None
+
+    def calculate_minimal_bid(self, current_top_bid):
+        new_bid = current_top_bid + random.choice(self.minimal_bid_weights)
+        
+        # Max Bid Limit Alert
+        if new_bid > self.max_bid_limit:
+            self.send_telegram(f"🛑 MAX BID LIMIT: Would bid {new_bid} but max is {self.max_bid_limit}!")
+            return None
+        
+        return new_bid
+
+    def execute_smart_auto_bid(self, campaign_name, campaign_data, current_top_bid):
+        try:
+            if campaign_data['your_bid'] >= current_top_bid:
+                return
+            
+            # Bid Cooldown / Rate Limiting
+            current_time = time.time()
+            last_bid = self.last_bid_time.get(campaign_name, 0)
+            if current_time - last_bid < self.bid_cooldown:
+                logger.info(f"RATE_LIMITED - {campaign_name} | Cooldown active")
+                return
+            
+            old_bid = campaign_data['your_bid']
+            new_bid = self.calculate_minimal_bid(current_top_bid)
+            
+            if new_bid is None or new_bid <= old_bid:
+                return
+            
+            # --- Bid Execution Sequence ---
+            adverts_url = "https://adsha.re/adverts"
+            response = self.session.get(adverts_url, timeout=30)
+            self.human_delay(1, 2)
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            increase_links = soup.find_all('a', href=re.compile(r'/adverts/bid/'))
+            bid_url = None
+            
+            for link in increase_links:
+                campaign_div = link.find_parent('div', style=re.compile(r'border.*solid.*#8CC63F'))
+                if campaign_div and campaign_name in campaign_div.get_text():
+                    bid_url = link['href']
+                    if not bid_url.startswith('http'):
+                        bid_url = f"https://adsha.re{bid_url}"
+                    break
+            
+            if not bid_url: return
+            
+            response = self.session.get(bid_url, timeout=30)
+            self.human_delay(1, 2)
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            form = soup.find('form', {'name': 'bid'})
+            if not form: return
+            
+            action = form.get('action', '')
+            if not action.startswith('http'):
+                action = f"https://adsha.re{action}"
+            
+            bid_data = {'bid': str(new_bid), 'vis': '0'}
+            self.human_delay(2, 4)
+            
+            response = self.session.post(action, data=bid_data, allow_redirects=True)
+            
+            if response.status_code == 200:
+                campaign_data['your_bid'] = new_bid
+                self.last_bid_time[campaign_name] = time.time()
+                
+                logger.info(f"AUTO_BID_SUCCESS - {campaign_name} | {old_bid} → {new_bid} | Regained #1")
+                
+                # Auto-Bid Success Alert
+                success_msg = f"""
+🚀 AUTO-BID SUCCESS!
+
+📊 Campaign: <b>{campaign_name}</b>
+🎯 Bid: {old_bid} → {new_bid} credits
+📈 Increase: +{new_bid - old_bid} credits
+🏆 Position: #1 Achieved!
+"""
+                self.send_telegram(success_msg)
+                
+        except Exception as e:
+            logger.error(f"AUTO_BID_ERROR - {campaign_name} | {e}")
+
+    # === CAMPAIGN PARSING ===
     def parse_campaigns_real_time(self):
         try:
             logger.info("PARSING_REALTIME: Fresh scrape...")
@@ -743,30 +920,7 @@ class UltimateBidder:
             logger.error(f"BID_CHECK: Error - {e}")
             return 0
 
-    def get_visitor_credits(self):
-        try:
-            response = self.session.get("https://adsha.re/adverts", timeout=30)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            visitors_match = re.search(r'Visitors:\s*([\d,]+)', soup.get_text())
-            if visitors_match:
-                return int(visitors_match.group(1).replace(',', ''))
-            return 0
-        except:
-            return 0
-
-    def get_traffic_credits(self):
-        try:
-            response = self.session.get("https://adsha.re/exchange/credits/adverts", timeout=30)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            credit_div = soup.find('div', style=re.compile(r'font-size:22pt'))
-            if credit_div:
-                credit_match = re.search(r'(\d+\.?\d*)', credit_div.get_text().strip())
-                if credit_match:
-                    return float(credit_match.group(1))
-            return 0
-        except:
-            return 0
-
+    # === TELEGRAM COMMUNICATION ===
     def send_telegram(self, message):
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
@@ -775,18 +929,6 @@ class UltimateBidder:
             return response.status_code == 200
         except:
             return False
-
-    def check_bid_drop(self, new_bid):
-        if len(self.bid_history) < 2:
-            return False, 0
-        
-        previous_bid = self.bid_history[-1]['bid']
-        if new_bid < previous_bid - 50:
-            drop_amount = previous_bid - new_bid
-            logger.info(f"BID_ALERT: Drop {previous_bid}→{new_bid} (-{drop_amount})")
-            return True, drop_amount
-        
-        return False, 0
 
     def process_telegram_command(self):
         try:
@@ -954,7 +1096,7 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
         self.send_telegram(campaigns_text)
 
     def send_burst_analysis(self):
-        """NEW: Show burst pattern analysis"""
+        """Show burst pattern analysis"""
         if not self.learning_data['burst_patterns']:
             self.send_telegram("🚀 No burst patterns detected yet. Checking...")
             return
@@ -1102,6 +1244,7 @@ Traffic: {traffic_credits} | Visitors: {visitor_credits:,}
 • 1000-2000 visitors/day optimization
 • Maximum unique viewers strategy
 • GitHub learning persistence
+• ACTIVE AUTO-BIDDING with rate limiting
 """
         self.send_telegram(help_msg)
 
@@ -1231,6 +1374,18 @@ Visitors: {visitor_credits:,}
         self.send_telegram(status_msg)
         logger.info("HOURLY_STATUS: Sent bomb predictor report")
 
+    def check_bid_drop(self, new_bid):
+        if len(self.bid_history) < 2:
+            return False, 0
+        
+        previous_bid = self.bid_history[-1]['bid']
+        if new_bid < previous_bid - 50:
+            drop_amount = previous_bid - new_bid
+            logger.info(f"BID_ALERT: Drop {previous_bid}→{new_bid} (-{drop_amount})")
+            return True, drop_amount
+        
+        return False, 0
+
     def check_and_alert(self):
         if not self.is_monitoring:
             return
@@ -1282,6 +1437,16 @@ Perfect time to start new campaign!
             new_campaigns[campaign_name]['top_bid'] = self.current_global_bid
         self.campaigns.update(new_campaigns)
         
+        # Execute AUTO-BIDDING for campaigns with auto-bid enabled
+        credit_safe = self.check_credit_safety()
+        if credit_safe and (self.auto_bid_enabled or any(campaign.get('auto_bid', False) for campaign in self.campaigns.values())):
+            for campaign_name, campaign_data in self.campaigns.items():
+                if campaign_data.get('auto_bid', False) or self.auto_bid_enabled:
+                    # Get actual top bid for this campaign
+                    actual_top_bid = self.get_top_bid_from_bid_page(campaign_name)
+                    if actual_top_bid and actual_top_bid > campaign_data['your_bid']:
+                        self.execute_smart_auto_bid(campaign_name, campaign_data, actual_top_bid)
+        
         # Check completion alerts with burst awareness
         self.check_completion_alerts()
         
@@ -1299,7 +1464,7 @@ Perfect time to start new campaign!
         if not hasattr(self, 'sent_alerts'):
             self.sent_alerts = {}
         
-        startup_msg = "💣 BOMB PREDICTOR STARTED!\n• 12-hour burst detection\n• 1000-2000 visitors/day optimization\n• Maximum unique viewers strategy\n• Burst-aware predictions\nType /help for commands"
+        startup_msg = "💣 BOMB PREDICTOR STARTED!\n• 12-hour burst detection\n• 1000-2000 visitors/day optimization\n• Maximum unique viewers strategy\n• Burst-aware predictions\n• ACTIVE AUTO-BIDDING with rate limiting\nType /help for commands"
         self.send_telegram(startup_msg)
         
         last_check = 0
