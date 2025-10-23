@@ -22,7 +22,7 @@ class UltimateBidder:
         # Environment variables
         self.bot_token = os.environ.get('BOT_TOKEN', "8439342017:AAEmRrBp-AKzVK6cbRdHekDGSpbgi7aH5Nc")
         self.chat_id = os.environ.get('CHAT_ID', "2052085789")
-        self.email = os.environ.get('EMAIL', "loginallapps@gmail.com")
+        self.email = os.environ.get('EMAIL', "jiocloud90@gmail.com")
         self.password = os.environ.get('PASSWORD', "@Sd2007123")
         self.github_token = os.environ.get('GITHUB_TOKEN')
         self.last_update_id = 0
